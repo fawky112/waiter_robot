@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<!--
+═══════════════════════════════════════════════════════════════════════════
+  Al Fanan Restaurant — Kitchen GUI
+═══════════════════════════════════════════════════════════════════════════
+
+  Browser page on the laptop. Talks to the Pi's server.py over WebSocket
+  at ws://<PI_IP>:8765 and shows the kitchen operator the robot's map,
+  table orders, payment history, manual joystick, and food-ready bells.
+
+  ─── COMMUNICATION PROTOCOL (every message is an integer as text) ──────
+
+  GUI → Robot (via gui_bridge.py)
+  ───────────────────────────────
+    Manual mode → /manu
+       1 Forward    2 Backward    3 Turn Right    4 Turn Left
+       5 Stepper UP   6 Stepper DOWN
+       7 STOP
+       8 Enter Manual   9 Exit Manual
+
+    Kitchen Bell → /gui_topic  (bridge TRANSLATES)
+       40  Bell Table 1   →   /gui_topic = 4
+       70  Bell Table 2   →   /gui_topic = 7
+    (We send 40/70 instead of 4/7 so the bell numbers don't clash with
+     manual mode's "Turn Left" and "STOP".)
+
+  Robot → GUI (via /table topic)
+  ──────────────────────────────
+    Table 1 mission:
+       11 H→T1            12 T1→Home (after order)
+       15 H→T1 (food)     16 T1→Home (final)
+
+    Table 2 mission:
+       41 H→T2            42 T2→Home (after order)
+       45 H→T2 (food)     46 T2→Home (final)
+
+    Shared / generic:
+       0  Idle            13 H→Kitchen          14 Kitchen→Home (food)
+       17 COMPLETE        18 Arrived/Waiting    19 OBSTACLE
+       20 Stepper UP      21 Stepper DOWN       22 Avoiding
+
+  Kiosk → GUI
+  ───────────
+    5     Payment confirmed
+    JSON  Order details {table, order_items, total}
+
+  ─── RELIABILITY ────────────────────────────────────────────────────────
+  Every ONE-SHOT command (bells 40/70, stop 7, enter 8, exit 9) is sent
+  through sendOnce() which fires the same number 3 times with 50 ms gaps
+  — protects against a single dropped Wi-Fi packet. EXCEPTIONS:
+    • Manual ARROWS (1-4) — already repeat every 200 ms while held
+    • Stepper (5/6) — fires ONCE; mechanism has end-stops, repeats could
+                      damage the lifting motor
+═══════════════════════════════════════════════════════════════════════════
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1.0">
+<title>Al Fanan — Kitchen Control</title>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0D1117;--bg2:#131920;--bg3:#1A2230;
+  --cyan:#00D4FF;--cyan2:#0099CC;--cyan-glow:rgba(0,212,255,0.25);
+  --green:#00C864;--green-glow:rgba(0,200,100,0.25);
+  --red:#FF4455;--red-glow:rgba(255,68,85,0.3);
+  --amber:#FFA000;--amber-glow:rgba(255,160,0,0.25);
+  --white:#FFFFFF;--silver:#C8D8E8;--dim:rgba(200,216,232,0.45);
+  --border:rgba(0,212,255,0.15);--border2:rgba(0,212,255,0.28);
+  --fn:'Rajdhani',sans-serif;--fa:'Tajawal',sans-serif;
+}
+html,body{height:100vh;overflow:hidden;background:var(--bg);color:var(--silver);font-family:var(--fn)}
+body{display:flex;flex-direction:column}
+
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,212,255,0.012) 3px,rgba(0,212,255,0.012) 4px);pointer-events:none;z-index:1000}
+
+#topbar{display:flex;align-items:center;justify-content:space-between;padding:0 28px;height:56px;border-bottom:1px solid var(--border);background:rgba(13,17,23,0.95);backdrop-filter:blur(10px);flex-shrink:0;position:sticky;top:0;z-index:200}
+.tb-left{display:flex;align-items:center;gap:16px}
+.tb-logo{font-size:20px;font-weight:700;color:var(--white);letter-spacing:6px;text-transform:uppercase;text-shadow:0 0 20px rgba(0,212,255,0.4)}
+.tb-sub{font-size:10px;letter-spacing:5px;color:var(--cyan);text-transform:uppercase;opacity:0.6}
+.tb-center{display:flex;align-items:center;gap:24px}
+.tb-right{display:flex;align-items:center;gap:20px}
+
+.leds{display:flex;align-items:center;gap:10px}
+.led-group{display:flex;align-items:center;gap:6px}
+.led{width:12px;height:12px;border-radius:50%;flex-shrink:0;transition:box-shadow .3s,opacity .3s}
+.led-green{background:#00C864;box-shadow:0 0 8px #00C864,0 0 16px rgba(0,200,100,0.5)}
+.led-green.off{background:#1a3a2a;box-shadow:none;opacity:.4}
+.led-red{background:#FF4455;box-shadow:0 0 8px #FF4455,0 0 16px rgba(255,68,85,0.5)}
+.led-red.off{background:#3a1a1e;box-shadow:none;opacity:.4}
+.led-label{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--dim)}
+
+.ws-dot{width:8px;height:8px;border-radius:50%;background:#FF4455;transition:background .3s,box-shadow .3s}
+.ws-dot.connected{background:#00C864;box-shadow:0 0 8px rgba(0,200,100,0.6)}
+.ws-label{font-size:10px;letter-spacing:3px;color:var(--dim);text-transform:uppercase}
+
+#main{display:flex;gap:0;flex:1;min-height:0;overflow:hidden}
+.panel{padding:20px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+#map-panel{width:320px;flex-shrink:0}
+#tables-panel{flex:1;min-width:0}
+#controls-panel{width:260px;flex-shrink:0;border-right:none;overflow-y:auto}
+#controls-panel::-webkit-scrollbar{width:3px}
+#controls-panel::-webkit-scrollbar-thumb{background:rgba(0,212,255,0.2);border-radius:2px}
+
+.panel-header{font-size:10px;letter-spacing:5px;text-transform:uppercase;color:var(--cyan);opacity:.6;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+
+#map-wrap{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px;position:relative}
+#map-svg{width:100%;overflow:visible}
+.map-path{stroke:rgba(0,212,255,0.12);stroke-width:1.5;stroke-dasharray:5 4;fill:none}
+
+#robot-dot{transition:cx 1.2s cubic-bezier(.4,0,.2,1), cy 1.2s cubic-bezier(.4,0,.2,1)}
+
+#robot-state-badge{margin-top:12px;background:rgba(0,212,255,0.06);border:1px solid var(--border);border-radius:8px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between}
+.rsb-label{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:var(--dim)}
+.rsb-value{font-size:14px;font-weight:700;color:var(--cyan);letter-spacing:2px;text-transform:uppercase}
+.rsb-num{font-size:10px;color:var(--dim);background:rgba(0,212,255,0.1);border-radius:4px;padding:2px 6px;letter-spacing:1px}
+
+.table-card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:10px;transition:border-color .25s;overflow:hidden;min-height:0;flex:1}
+.table-card.status-ordered{border-color:rgba(255,160,0,0.4)}
+.table-card.status-pickup{border-color:rgba(0,212,255,0.3)}
+.table-card.status-delivering{border-color:rgba(0,212,255,0.5)}
+.table-card.status-waiting-payment{border-color:rgba(0,200,100,0.4)}
+.table-card.status-paid{border-color:rgba(0,200,100,0.25)}
+
+.tc-header{display:flex;align-items:center;justify-content:space-between}
+.tc-title{font-size:28px;font-weight:700;color:var(--white);letter-spacing:3px;text-transform:uppercase}
+.tc-badge{font-size:11px;letter-spacing:3px;text-transform:uppercase;padding:4px 14px;border-radius:20px;font-weight:600}
+.badge-empty{background:rgba(200,216,232,0.08);color:var(--dim);border:1px solid rgba(200,216,232,0.15)}
+.badge-ordered{background:rgba(255,160,0,0.12);color:var(--amber);border:1px solid rgba(255,160,0,0.3)}
+.badge-pickup{background:rgba(0,212,255,0.1);color:var(--cyan);border:1px solid rgba(0,212,255,0.3)}
+.badge-delivering{background:rgba(0,212,255,0.15);color:var(--cyan);border:1px solid var(--cyan)}
+.badge-waiting-payment{background:rgba(0,200,100,0.1);color:var(--green);border:1px solid rgba(0,200,100,0.35)}
+.badge-paid{background:rgba(0,200,100,0.08);color:var(--green);border:1px solid rgba(0,200,100,0.2)}
+
+.tc-coords{font-size:11px;color:var(--dim);letter-spacing:1px}
+.tc-divider{height:1px;background:var(--border)}
+.tc-order{flex:1;min-height:0;overflow-y:auto}
+.tc-order::-webkit-scrollbar{width:3px}
+.tc-order::-webkit-scrollbar-thumb{background:rgba(0,212,255,0.2);border-radius:2px}
+.tc-order-empty{display:flex;align-items:center;justify-content:center;height:120px;font-size:13px;letter-spacing:3px;text-transform:uppercase;color:rgba(200,216,232,0.2)}
+.tc-order-list{display:flex;flex-direction:column;gap:8px}
+.tc-order-item{display:flex;align-items:center;gap:10px;background:rgba(0,212,255,0.04);border:1px solid var(--border);border-radius:8px;padding:8px 12px}
+.toi-name{flex:1;font-size:15px;color:var(--silver)}
+.toi-price{font-size:15px;font-weight:700;color:var(--cyan)}
+.toi-qty{font-size:12px;color:var(--dim);margin-right:4px}
+
+.tc-footer{display:flex;align-items:center;justify-content:space-between}
+.tc-total{font-size:12px;color:var(--dim);letter-spacing:1px}
+.tc-total strong{color:var(--white);font-size:20px}
+.tc-time{font-size:11px;color:var(--dim);letter-spacing:1px}
+
+.ctrl-section{margin-bottom:20px}
+.ctrl-section-title{font-size:10px;letter-spacing:4px;text-transform:uppercase;color:var(--dim);margin-bottom:10px}
+
+.bell-btn{width:100%;padding:12px 16px;border-radius:10px;border:1px solid rgba(255,160,0,0.35);background:rgba(255,160,0,0.08);cursor:pointer;display:flex;align-items:center;gap:12px;margin-bottom:8px;transition:background .18s,border-color .18s,transform .1s;position:relative;overflow:hidden}
+.bell-btn::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--amber),transparent);opacity:.7}
+.bell-btn:hover{background:rgba(255,160,0,0.14);border-color:rgba(255,160,0,0.55)}
+.bell-btn:active{transform:scale(0.97)}
+.bell-btn:disabled{opacity:.25;cursor:not-allowed;transform:none}
+
+/* Table Available buttons — green variant of .bell-btn, used to tell
+   the robot "customer left, you may dispatch to this table again". */
+.avail-btn{width:100%;padding:12px 16px;border-radius:10px;border:1px solid rgba(76,217,100,0.35);background:rgba(76,217,100,0.08);cursor:pointer;display:flex;align-items:center;gap:12px;margin-bottom:8px;transition:background .18s,border-color .18s,transform .1s;position:relative;overflow:hidden}
+.avail-btn::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,#4cd964,transparent);opacity:.7}
+.avail-btn:hover:not(:disabled){background:rgba(76,217,100,0.14);border-color:rgba(76,217,100,0.55)}
+.avail-btn:active:not(:disabled){transform:scale(0.97)}
+.avail-btn:disabled{opacity:.25;cursor:not-allowed;transform:none}
+.avail-btn .bell-icon{color:#4cd964}
+.avail-btn .bell-en{color:#4cd964}
+.bell-icon{font-size:22px;flex-shrink:0}
+.bell-text{flex:1;text-align:left}
+.bell-en{font-size:14px;font-weight:700;color:var(--white);letter-spacing:2px;text-transform:uppercase}
+.bell-ar{font-family:var(--fa);font-size:11px;color:var(--dim)}
+
+.mission-btn{width:100%;padding:11px 16px;border-radius:10px;border:1px solid rgba(0,212,255,0.35);background:rgba(0,212,255,0.07);cursor:pointer;display:flex;align-items:center;gap:12px;margin-bottom:8px;transition:background .18s,border-color .18s,transform .1s;position:relative;overflow:hidden}
+.mission-btn::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--cyan),transparent);opacity:.7}
+.mission-btn:hover{background:rgba(0,212,255,0.14);border-color:rgba(0,212,255,0.6)}
+.mission-btn:active{transform:scale(0.97)}
+.mission-btn:disabled{opacity:.22;cursor:not-allowed;transform:none}
+.mission-icon{font-size:20px;flex-shrink:0}
+.mission-en{font-size:13px;font-weight:700;color:var(--white);letter-spacing:2px;text-transform:uppercase}
+
+.manual-btn{width:100%;padding:14px 16px;border-radius:10px;border:1px solid rgba(200,216,232,0.2);background:rgba(200,216,232,0.05);cursor:pointer;display:flex;align-items:center;gap:12px;transition:background .18s,border-color .18s,transform .1s;position:relative;overflow:hidden}
+.manual-btn:hover{background:rgba(200,216,232,0.1);border-color:rgba(200,216,232,0.35)}
+.manual-btn:active{transform:scale(0.97)}
+.manual-btn.active{background:rgba(255,68,85,0.1);border-color:rgba(255,68,85,0.5)}
+.manual-icon{font-size:22px;flex-shrink:0}
+.manual-en{font-size:14px;font-weight:700;color:var(--white);letter-spacing:2px;text-transform:uppercase}
+
+#test-panel{background:rgba(13,17,23,0.95);border-top:1px solid var(--border);padding:12px 20px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.tp-label{font-size:9px;letter-spacing:3px;color:rgba(0,212,255,0.35);text-transform:uppercase;width:100%}
+.tp-btn{padding:4px 11px;border-radius:5px;cursor:pointer;font-family:var(--fn);font-size:11px;font-weight:700;letter-spacing:1px;background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.35);color:var(--cyan);transition:transform .1s,background .1s}
+.tp-btn:hover{background:rgba(0,212,255,0.16)}
+.tp-btn:active{transform:scale(.93)}
+.tp-btn.orange{background:rgba(255,160,0,0.08);border-color:rgba(255,160,0,0.35);color:var(--amber)}
+.tp-btn.green{background:rgba(0,200,100,0.08);border-color:rgba(0,200,100,0.35);color:var(--green)}
+.tp-sep{width:1px;height:20px;background:var(--border);flex-shrink:0}
+
+#obstacle-overlay{position:fixed;inset:0;z-index:9000;display:none;flex-direction:column;align-items:center;justify-content:center;background:rgba(10,5,8,0.94)}
+#obstacle-overlay.visible{display:flex}
+#obstacle-overlay > div{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;width:100%}
+.obs-title{font-size:48px;font-weight:700;color:var(--red);letter-spacing:6px;text-transform:uppercase;text-shadow:0 0 30px rgba(255,68,85,.6);margin-top:28px}
+
+#manual-overlay{position:fixed;inset:0;z-index:8000;display:none;flex-direction:column;align-items:center;justify-content:center;background:rgba(13,17,23,0.96)}
+#manual-overlay.visible{display:flex}
+.man-title{font-size:36px;font-weight:700;color:var(--white);letter-spacing:6px;text-transform:uppercase}
+.dpad{display:grid;grid-template-columns:80px 80px 80px;grid-template-rows:80px 80px 80px;gap:8px}
+.dpad-btn{border-radius:12px;border:1px solid rgba(0,212,255,0.3);background:rgba(0,212,255,0.08);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:4px;transition:background .12s,border-color .12s;user-select:none}
+.dpad-btn:hover{background:rgba(0,212,255,0.16)}
+.dpad-btn.active-dir{background:rgba(0,212,255,0.28);border-color:var(--cyan);box-shadow:0 0 24px var(--cyan-glow)}
+.dpad-empty{pointer-events:none}
+.dpad-arrow{font-size:28px;color:var(--cyan)}
+.dpad-label{font-size:10px;letter-spacing:2px;color:var(--dim);text-transform:uppercase}
+.dpad-stop{border-radius:12px;border:1px solid rgba(255,68,85,0.4);background:rgba(255,68,85,0.1);cursor:pointer;display:flex;align-items:center;justify-content:center}
+.dpad-stop:hover{background:rgba(255,68,85,0.2)}
+.man-exit{margin-top:36px;padding:12px 36px;border-radius:10px;border:1px solid rgba(255,68,85,.4);background:rgba(255,68,85,.08);cursor:pointer;font-family:var(--fn);font-size:14px;font-weight:700;color:var(--red);letter-spacing:3px;text-transform:uppercase}
+.man-exit:hover{background:rgba(255,68,85,.18)}
+.man-stepper-row{display:flex;gap:12px;margin-top:24px}
+.man-stepper-btn{padding:12px 24px;border-radius:8px;border:1px solid rgba(0,212,255,0.3);background:rgba(0,212,255,0.06);cursor:pointer;font-family:var(--fn);font-size:13px;font-weight:700;color:var(--cyan);letter-spacing:2px;text-transform:uppercase;transition:background .15s}
+.man-stepper-btn:hover{background:rgba(0,212,255,0.14)}
+
+#logo-area{flex:1;display:flex;align-items:center;justify-content:center;padding:12px 8px;min-height:0}
+#logo-area img{max-height:100%;max-width:100%;object-fit:contain;filter:drop-shadow(0 0 18px rgba(0,212,255,0.3));opacity:0.88}
+
+#wallet-modal{position:fixed;inset:0;z-index:7000;display:none;align-items:flex-start;justify-content:flex-end}
+#wallet-modal.visible{display:flex}
+.wallet-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.5)}
+.wallet-drawer{position:relative;z-index:1;width:380px;height:100vh;background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.wallet-drawer-header{padding:20px 20px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.wallet-drawer-title{font-size:20px;font-weight:700;color:var(--white);letter-spacing:3px;text-transform:uppercase}
+.wallet-close{background:rgba(200,216,232,.08);border:1px solid var(--border);border-radius:8px;padding:6px 12px;cursor:pointer;font-family:var(--fn);font-size:12px;font-weight:700;color:var(--dim);letter-spacing:2px;transition:background .18s}
+.wallet-close:hover{background:rgba(200,216,232,.16)}
+.wallet-summary{padding:14px 20px;background:rgba(0,212,255,.04);border-bottom:1px solid var(--border);display:flex;gap:20px;flex-shrink:0}
+.ws-stat{display:flex;flex-direction:column;gap:2px}
+.ws-stat-val{font-size:22px;font-weight:700;color:var(--white)}
+.ws-stat-lbl{font-size:10px;letter-spacing:3px;color:var(--dim);text-transform:uppercase}
+.wallet-list{flex:1;overflow-y:auto;padding:12px}
+.wallet-list::-webkit-scrollbar{width:4px}
+.wallet-list::-webkit-scrollbar-thumb{background:rgba(0,212,255,.2);border-radius:2px}
+.wallet-entry{background:rgba(0,212,255,.04);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.we-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.we-table{font-size:13px;font-weight:700;color:var(--cyan);letter-spacing:2px;text-transform:uppercase}
+.we-amount{font-size:18px;font-weight:700;color:var(--white)}
+.we-time{font-size:10px;color:var(--dim);letter-spacing:1px;margin-bottom:6px}
+.we-items{font-size:11px;color:var(--dim)}
+.wallet-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;gap:8px;color:rgba(200,216,232,.2);font-size:11px;letter-spacing:3px;text-transform:uppercase}
+.wallet-empty-icon{font-size:40px;opacity:.3}
+
+.wallet-btn{width:100%;padding:11px 16px;border-radius:10px;border:1px solid var(--border2);background:rgba(0,212,255,0.07);cursor:pointer;display:flex;align-items:center;gap:12px;transition:background .18s,transform .1s;margin-top:8px}
+.wallet-btn:hover{background:rgba(0,212,255,0.13)}
+.wallet-btn:active{transform:scale(0.97)}
+.wallet-icon{font-size:20px;flex-shrink:0}
+.wallet-text{flex:1;text-align:left}
+.wallet-en{font-size:13px;font-weight:700;color:var(--white);letter-spacing:2px;text-transform:uppercase}
+.wallet-count{font-size:11px;color:var(--cyan)}
+.wallet-total-badge{font-size:13px;font-weight:700;color:var(--cyan);background:rgba(0,212,255,0.1);border-radius:6px;padding:2px 8px}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="tb-left">
+    <div>
+      <div class="tb-logo">Al Fanan</div>
+      <div class="tb-sub">Kitchen Control</div>
+    </div>
+  </div>
+  <div class="tb-center">
+    <div class="leds">
+      <div class="led-group">
+        <div class="led led-green" id="led-green"></div>
+        <span class="led-label">Power</span>
+      </div>
+      <div class="led-group">
+        <div class="led led-red off" id="led-red"></div>
+        <span class="led-label">Fault</span>
+      </div>
+    </div>
+  </div>
+  <div class="tb-right">
+    <div style="display:flex;align-items:center;gap:7px">
+      <div class="ws-dot" id="ws-dot"></div>
+      <span class="ws-label" id="ws-label">Disconnected</span>
+    </div>
+  </div>
+</div>
+
+<div id="main">
+  <!-- MAP PANEL -->
+  <div class="panel" id="map-panel">
+    <div class="panel-header">Robot Map</div>
+    <div id="map-wrap">
+      <svg id="map-svg" viewBox="0 0 280 300">
+        <line x1="40" y1="30" x2="40" y2="280" stroke="rgba(0,212,255,.06)" stroke-width="1"/>
+        <line x1="40" y1="280" x2="250" y2="280" stroke="rgba(0,212,255,.06)" stroke-width="1"/>
+        <line x1="80" y1="240" x2="80" y2="90" class="map-path"/>
+        <line x1="80" y1="240" x2="210" y2="270" class="map-path"/>
+        <line x1="80" y1="90" x2="210" y2="270" class="map-path"/>
+        <line x1="80" y1="240" x2="210" y2="212" class="map-path"/>
+        <line x1="80" y1="90" x2="210" y2="212" class="map-path"/>
+        <g>
+          <rect x="52" y="66" width="56" height="32" rx="6" fill="rgba(255,160,0,0.12)" stroke="rgba(255,160,0,0.4)" stroke-width="1"/>
+          <text x="80" y="80" text-anchor="middle" fill="#FFA000" font-size="11" font-family="Rajdhani,sans-serif" font-weight="600">KITCHEN</text>
+          <text x="80" y="92" text-anchor="middle" fill="rgba(200,216,232,0.45)" font-size="9" font-family="Rajdhani,sans-serif">(0, 1.0)</text>
+        </g>
+        <g>
+          <rect x="182" y="254" width="56" height="32" rx="6" fill="rgba(0,212,255,0.08)" stroke="rgba(0,212,255,0.3)" stroke-width="1" id="t1-rect"/>
+          <text x="210" y="268" text-anchor="middle" fill="#C8D8E8" font-size="11" font-family="Rajdhani,sans-serif" font-weight="600">TABLE 1</text>
+          <text x="210" y="280" text-anchor="middle" fill="rgba(200,216,232,0.45)" font-size="9" font-family="Rajdhani,sans-serif">(1.5, -0.5)</text>
+        </g>
+        <g>
+          <rect x="182" y="196" width="56" height="32" rx="6" fill="rgba(0,212,255,0.08)" stroke="rgba(0,212,255,0.3)" stroke-width="1" id="t2-rect"/>
+          <text x="210" y="210" text-anchor="middle" fill="#C8D8E8" font-size="11" font-family="Rajdhani,sans-serif" font-weight="600">TABLE 2</text>
+          <text x="210" y="222" text-anchor="middle" fill="rgba(200,216,232,0.45)" font-size="9" font-family="Rajdhani,sans-serif">(1.5, 0.5)</text>
+        </g>
+        <g>
+          <rect x="52" y="224" width="56" height="32" rx="6" fill="rgba(0,200,100,0.1)" stroke="rgba(0,200,100,0.35)" stroke-width="1"/>
+          <text x="80" y="238" text-anchor="middle" fill="#00C864" font-size="11" font-family="Rajdhani,sans-serif" font-weight="600">HOME</text>
+          <text x="80" y="250" text-anchor="middle" fill="rgba(200,216,232,0.45)" font-size="9" font-family="Rajdhani,sans-serif">(0, 0)</text>
+        </g>
+        <g id="robot-group">
+          <circle id="robot-ring" cx="80" cy="240" r="14" fill="none" stroke="rgba(0,212,255,0.25)" stroke-width="1.5" opacity="0"/>
+          <circle id="robot-dot" cx="80" cy="240" r="8" fill="#00D4FF" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+          <text id="robot-emoji" x="80" y="244" text-anchor="middle" font-size="10" fill="white">🤖</text>
+        </g>
+      </svg>
+    </div>
+    <div id="robot-state-badge">
+      <div>
+        <div class="rsb-label">Robot State</div>
+        <div class="rsb-value" id="rsb-value">Idle</div>
+      </div>
+      <div class="rsb-num" id="rsb-num">State 0</div>
+    </div>
+    <div id="logo-area">
+      <img src="logo.png" alt="Al Fanan Restaurant">
+    </div>
+  </div>
+
+  <!-- TABLES PANEL -->
+  <div class="panel" id="tables-panel">
+    <div class="panel-header">Table Status</div>
+    <div style="display:flex;gap:14px;flex:1;min-height:0">
+      <div class="table-card" id="tc-1">
+      <div class="tc-header">
+        <div class="tc-title">Table 1</div>
+        <div class="tc-badge badge-empty" id="tc1-badge">Empty</div>
+      </div>
+      <div class="tc-coords">Position: (1.5, −0.5)</div>
+      <div class="tc-divider"></div>
+      <div class="tc-order" id="tc1-order">
+        <div class="tc-order-empty">No active order</div>
+      </div>
+      <div class="tc-footer">
+        <div class="tc-total" id="tc1-total">—</div>
+        <div class="tc-time" id="tc1-time">—</div>
+      </div>
+    </div>
+    <div class="table-card" id="tc-2">
+      <div class="tc-header">
+        <div class="tc-title">Table 2</div>
+        <div class="tc-badge badge-empty" id="tc2-badge">Empty</div>
+      </div>
+      <div class="tc-coords">Position: (1.5, 0.5)</div>
+      <div class="tc-divider"></div>
+      <div class="tc-order" id="tc2-order">
+        <div class="tc-order-empty">No active order</div>
+      </div>
+      <div class="tc-footer">
+        <div class="tc-total" id="tc2-total">—</div>
+        <div class="tc-time" id="tc2-time">—</div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- CONTROLS PANEL -->
+  <div class="panel" id="controls-panel">
+    <div class="ctrl-section">
+      <div class="ctrl-section-title">Robot Control</div>
+      <button class="manual-btn" id="manual-btn" onclick="toggleManual()">
+        <span class="manual-icon">🕹️</span>
+        <div><div class="manual-en">Manual Mode</div></div>
+      </button>
+    </div>
+
+    <div class="ctrl-section">
+      <div class="ctrl-section-title">Kitchen Bell</div>
+      <button class="bell-btn" id="bell-t1" onclick="sendBell()" disabled>
+        <span class="bell-icon">🔔</span>
+        <div class="bell-text">
+          <div class="bell-en">Table 1 — Food Ready</div>
+          <div class="bell-ar">الطاولة ١ جاهزة</div>
+        </div>
+      </button>
+      <button class="bell-btn" id="bell-t2" onclick="sendBellT2()" disabled style="margin-top:8px">
+        <span class="bell-icon">🔔</span>
+        <div class="bell-text">
+          <div class="bell-en">Table 2 — Food Ready</div>
+          <div class="bell-ar">الطاولة ٢ جاهزة</div>
+        </div>
+      </button>
+    </div>
+
+    <div class="ctrl-section">
+      <div class="ctrl-section-title">Table Available</div>
+      <button class="avail-btn" id="avail-t1" onclick="sendAvailableT1()" disabled>
+        <span class="bell-icon">🟢</span>
+        <div class="bell-text">
+          <div class="bell-en">Table 1 — Available</div>
+          <div class="bell-ar">الطاولة ١ متاحة</div>
+        </div>
+      </button>
+      <button class="avail-btn" id="avail-t2" onclick="sendAvailableT2()" disabled style="margin-top:8px">
+        <span class="bell-icon">🟢</span>
+        <div class="bell-text">
+          <div class="bell-en">Table 2 — Available</div>
+          <div class="bell-ar">الطاولة ٢ متاحة</div>
+        </div>
+      </button>
+    </div>
+
+    <div class="ctrl-section">
+      <div class="ctrl-section-title">Payments</div>
+      <button class="wallet-btn" onclick="openWallet()">
+        <span class="wallet-icon">💳</span>
+        <div class="wallet-text">
+          <div class="wallet-en">Payment History</div>
+          <div class="wallet-count" id="wallet-count">0 tx</div>
+        </div>
+        <div class="wallet-total-badge" id="wallet-total-badge">0 EGP</div>
+      </button>
+    </div>
+
+    <div class="ctrl-section" style="margin-top:auto">
+      <div class="ctrl-section-title">Server</div>
+      <div style="font-size:11px;color:var(--dim);letter-spacing:1px;line-height:1.8">
+        <div id="conn-ip">—</div>
+        <div>WS :8765</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- OBSTACLE OVERLAY — two states: detected (red) and avoided (green) -->
+<div id="obstacle-overlay">
+  <!-- Detected state -->
+  <div id="obs-detected">
+    <span style="font-size:64px">⚠️</span>
+    <div class="obs-title">Obstacle Detected</div>
+    <div style="font-size:22px;color:rgba(255,68,85,.6);margin-top:8px">عائق في الطريق</div>
+  </div>
+  <!-- Avoided state — shown for 2s after 19 stops arriving -->
+  <div id="obs-avoided" style="display:none">
+    <span style="font-size:64px">✅</span>
+    <div class="obs-title" style="color:#00C864;text-shadow:0 0 20px rgba(0,200,100,0.5)">Obstacle Avoided</div>
+    <div style="font-size:22px;color:rgba(0,200,100,.6);margin-top:8px">تم تجنب العائق</div>
+  </div>
+</div>
+
+<!-- MANUAL MODE OVERLAY -->
+<div id="manual-overlay">
+  <div style="text-align:center;margin-bottom:40px">
+    <div class="man-title">Manual Control</div>
+    <div style="font-size:18px;color:var(--dim);margin-top:6px">التحكم اليدوي في الروبوت</div>
+  </div>
+  <div class="dpad">
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" id="btn-fwd" onclick="selectManualDirection('1','btn-fwd')">
+      <span class="dpad-arrow">↑</span><span class="dpad-label">Forward</span>
+    </button>
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" id="btn-left" onclick="selectManualDirection('4','btn-left')">
+      <span class="dpad-arrow">↺</span><span class="dpad-label">Turn L</span>
+    </button>
+    <button class="dpad-stop" onclick="manualStopMovement()">
+      <span style="font-size:22px">⬛</span>
+    </button>
+    <button class="dpad-btn" id="btn-right" onclick="selectManualDirection('3','btn-right')">
+      <span class="dpad-arrow">↻</span><span class="dpad-label">Turn R</span>
+    </button>
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" id="btn-back" onclick="selectManualDirection('2','btn-back')">
+      <span class="dpad-arrow">↓</span><span class="dpad-label">Back</span>
+    </button>
+    <div class="dpad-empty"></div>
+  </div>
+  <div class="man-stepper-row">
+    <button class="man-stepper-btn" onclick="sendStepperCmd('5')">⬆ Stepper UP</button>
+    <button class="man-stepper-btn" onclick="sendStepperCmd('6')">⬇ Stepper DOWN</button>
+  </div>
+  <button class="man-exit" onclick="exitManual()">✕ Exit Manual Mode</button>
+</div>
+
+<!-- WALLET MODAL -->
+<div id="wallet-modal">
+  <div class="wallet-backdrop" onclick="closeWallet()"></div>
+  <div class="wallet-drawer">
+    <div class="wallet-drawer-header">
+      <div class="wallet-drawer-title">💳 Payment History</div>
+      <button class="wallet-close" onclick="closeWallet()">✕ Close</button>
+    </div>
+    <div class="wallet-summary">
+      <div class="ws-stat">
+        <div class="ws-stat-val" id="wdrawer-count">0</div>
+        <div class="ws-stat-lbl">Transactions</div>
+      </div>
+      <div class="ws-stat">
+        <div class="ws-stat-val" id="wdrawer-total">0 EGP</div>
+        <div class="ws-stat-lbl">Total</div>
+      </div>
+    </div>
+    <div class="wallet-list" id="wallet-list">
+      <div class="wallet-empty"><div class="wallet-empty-icon">💳</div><div>No payments yet</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- TEST PANEL -->
+<div id="test-panel">
+  <div class="tp-label">Test Events</div>
+  <button class="tp-btn" onclick="sim(11)">11 H→T1</button>
+  <button class="tp-btn" onclick="sim(18)">18 Arrived</button>
+  <button class="tp-btn" onclick="sim(12)">12 T1→Home</button>
+  <button class="tp-btn" onclick="sim(13)">13 H→K</button>
+  <button class="tp-btn" onclick="sim(14)">14 K→Home</button>
+  <button class="tp-btn" onclick="sim(15)">15 H→T1 Food</button>
+  <div class="tp-sep"></div>
+  <button class="tp-btn orange" onclick="sim(19)">19 OBSTACLE</button>
+  <button class="tp-btn orange" onclick="sim(22)">22 AVOIDING</button>
+  <button class="tp-btn green" onclick="sim(17)">17 COMPLETE</button>
+  <div class="tp-sep"></div>
+  <button class="tp-btn orange" onclick='handleMsg("{\"table\":1,\"order_items\":[{\"name\":\"Lasagna\",\"qty\":1,\"price\":220}],\"total\":220}")'>🧾 Order T1</button>
+  <button class="tp-btn green" onclick="simPaid()">💳 Paid T1</button>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════
+   CONFIG
+═══════════════════════════════════════════════════ */
+const PI_IP = '172.20.10.6';  // Pi's IP — direct connection to server.py
+let ws;
+
+/* ═══════════════════════════════════════════════════
+   GLOBAL STATE
+   manualMode = false by default — starts in automatic
+═══════════════════════════════════════════════════ */
+let robotState   = 0;
+let lastRobotState  = 0;
+let robotAtHome     = true;   // robot is at home + stopped (gates bells + available)
+let lastStateValue  = -1;     // deduplication — last state received
+let lastStateTime   = 0;      // deduplication — timestamp of last state
+let manualMode   = false;     // DEFAULT: automatic mode
+let manualCmd    = null;
+let manualTimer  = null;
+
+const table1 = { status:'empty', order:[], total:0, orderTime:null };
+const table2 = { status:'empty', order:[], total:0, orderTime:null };
+const paymentHistory = [];
+
+/* ═══════════════════════════════════════════════════
+   MAP POSITIONS
+═══════════════════════════════════════════════════ */
+const POS = {
+  HOME:    { cx:80,  cy:240 },
+  KITCHEN: { cx:80,  cy:90  },
+  T1:      { cx:210, cy:270 },
+  T2:      { cx:210, cy:212 },
+};
+
+const STATE_MAP = {
+  0:  { pos:'HOME',    label:'Idle'              },
+  11: { pos:'T1',      label:'H → T1'            },
+  12: { pos:'HOME',    label:'T1 → Home'         },
+  13: { pos:'KITCHEN', label:'Home → Kitchen'    },
+  14: { pos:'HOME',    label:'Kitchen → Home'    },
+  15: { pos:'T1',      label:'H → T1 (Food)'     },
+  16: { pos:'HOME',    label:'T1 → Home (Final)' },
+  17: { pos:'HOME',    label:'Complete'          },
+  18: { pos:null,      label:'Waiting / Arrived' },
+  19: { pos:null,      label:'OBSTACLE'          },
+  20: { pos:'KITCHEN', label:'Stepper UP'        },
+  21: { pos:'T1',      label:'Stepper DOWN'      },
+  22: { pos:null,      label:'AVOIDING'          },
+  30: { pos:null,      label:'FAULT / E-Stop'    },
+  41: { pos:'T2',      label:'H → T2'            },
+  42: { pos:'HOME',    label:'T2 → Home'         },
+  45: { pos:'T2',      label:'H → T2 (Food)'     },
+  46: { pos:'HOME',    label:'T2 → Home (Final)' },
+};
+
+/* ═══════════════════════════════════════════════════
+   WEBSOCKET
+═══════════════════════════════════════════════════ */
+function connectWS() {
+  ws = new WebSocket(`ws://${PI_IP}:8765`);
+  ws.onopen = () => {
+    document.getElementById('ws-dot').classList.add('connected');
+    document.getElementById('ws-label').textContent = 'Connected';
+    document.getElementById('conn-ip').textContent = PI_IP;
+    setLed('green', true);
+  };
+  ws.onclose = () => {
+    document.getElementById('ws-dot').classList.remove('connected');
+    document.getElementById('ws-label').textContent = 'Disconnected';
+    setLed('green', false);
+    setTimeout(connectWS, 3000);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = e => handleMsg(e.data.trim());
+}
+
+function send(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(String(msg));
+}
+
+// One-shot commands (bells, stepper, stop, enter/exit) are sent 3 times
+// with 50 ms between them so a single dropped Wi-Fi packet doesn't kill
+// the action.  Continuous commands (manual arrows) are NOT routed here —
+// they already repeat every 200 ms while held, which is reliable enough.
+function sendOnce(msg) {
+  send(msg);
+  setTimeout(() => send(msg),  50);
+  setTimeout(() => send(msg), 100);
+}
+function sim(num) { handleMsg(String(num)); }
+function simPaid() { handlePaymentReceived(); }
+
+/* ═══════════════════════════════════════════════════
+   MESSAGE HANDLER
+═══════════════════════════════════════════════════ */
+function handleMsg(raw) {
+  console.log('[RX]', raw);
+
+  // Try JSON first (order from kiosk)
+  try {
+    const json = JSON.parse(raw);
+    if (json.table && json.order_items) {
+      handleOrderJSON(json);
+      return;
+    }
+  } catch(e) {}
+
+  // Try integer (ESP state or payment signal)
+  const num = Number(raw);
+  if (!isNaN(num) && raw.trim() !== '') {
+    handleNumber(num);
+    return;
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   JSON ORDER
+═══════════════════════════════════════════════════ */
+function handleOrderJSON(json) {
+  if (json.table !== 1 && json.table !== 2) return;
+  const tbl = (json.table === 1) ? table1 : table2;
+
+  const newItems = json.order_items.map(i => ({
+    name: i.name, qty: i.qty || 1, price: i.price
+  }));
+
+  tbl.order = newItems;
+  tbl.total = newItems.reduce((s, i) => s + i.price, 0);
+  tbl.status = 'ordered';
+  tbl.orderTime = new Date();
+
+  updateTableCard();
+  updateAllControls();
+}
+
+/* ═══════════════════════════════════════════════════
+   PAYMENT RECEIVED
+═══════════════════════════════════════════════════ */
+function handlePaymentReceived() {
+  // Payment "5" applies to whichever table is currently 'ordered'.
+  // (Only one customer is paying at any moment.)
+  let tbl = null, tblNum = 0;
+  if (table1.status === 'ordered')      { tbl = table1; tblNum = 1; }
+  else if (table2.status === 'ordered') { tbl = table2; tblNum = 2; }
+  if (!tbl) return;
+
+  if (tbl.total > 0) {
+    paymentHistory.unshift({
+      table: tblNum, amount: tbl.total,
+      items: [...tbl.order], time: new Date()
+    });
+  }
+  // Status = 'paid'. Order data STAYS visible. Bell button STAYS enabled.
+  // Table will be reset back to 'empty' only when robot reports state 17 (COMPLETE).
+  tbl.status = 'paid';
+  updateTableCard();
+  updateWalletButton();
+  updateAllControls();
+}
+
+/* ═══════════════════════════════════════════════════
+   INTEGER HANDLER
+═══════════════════════════════════════════════════ */
+function handleNumber(n) {
+  // ── Deduplication ───────────────────────────────────────
+  // The robot firmware publishes some states multiple times in rapid
+  // succession (e.g. state 18 arrives 6× at the same timestamp).
+  // Only process the first occurrence within a 600 ms window.
+  const now = Date.now();
+  if (n === lastStateValue && (now - lastStateTime) < 600) {
+    console.log(`[DEDUP] ignored duplicate state ${n}`);
+    return;
+  }
+  lastStateValue = n;
+  lastStateTime  = now;
+  // Payment signal from kiosk:
+  //   5 = first order vid5 ended → payment done
+  //   7 = re-order vid5 ended   → payment done (robot will go home + reset)
+  if (n === 5 || n === 7) {
+    handlePaymentReceived();
+    return;
+  }
+
+  // ── IGNORE non-state numbers ────────────────────────────
+  //   "3" = table-arrival trigger from kiosk_bridge (triggers vid1)
+  //   "6" = customer-done from kiosk
+  if (n === 3 || n === 6) return;
+
+  // ESP states (0-46; T2 mission uses 41,42,45,46)
+  if (n >= 0 && n <= 46) {
+    // State 30 = fault/E-Stop — handled separately by the LED watchdog.
+    // It does NOT advance the robot state on the map.
+    if (n === 30) {
+      handleFaultSignal();
+      return;
+    }
+
+    lastRobotState = robotState;
+    setRobotState(n);
+    updateRobotAtHome(n, lastRobotState);
+
+    // Obstacle — only state 19 triggers it. Uses a watchdog timer:
+    // every 19 resets the 2s clock; when 19 stops arriving the overlay
+    // switches to "Avoided" for 2s then disappears automatically.
+    if (n === 19) {
+      handleObstacleSignal();
+    }
+
+    // ─── Table status transitions driven by robot states ──────────
+    // Each table is INDEPENDENT. We only touch a table's status when
+    // a state clearly belongs to its mission (15→T1, 45→T2, 16→T1, 46→T2).
+    // The shared K→H (14) doesn't touch any status — the table that's
+    // already 'waiting_for_food' simply stays that way.
+
+    // T1 mission states
+    if (n === 15) {
+      table1.status = 'delivering_food';
+      updateTableCard();
+    } else if (n === 16) {
+      table1.status = 'food_delivered';
+      updateTableCard();
+    }
+
+    // T2 mission states
+    if (n === 45) {
+      table2.status = 'delivering_food';
+      updateTableCard();
+    } else if (n === 46) {
+      table2.status = 'food_delivered';
+      updateTableCard();
+    }
+
+    // State 17 = robot mission complete. We DO NOT auto-reset the table
+    // here anymore — the customer is still eating after pressing "I'm
+    // Done", so the camera-permission lock must stay on until the staff
+    // physically sees the customer leave and presses "Table Available".
+    // The table card stays in 'food_delivered' (which keeps Available
+    // enabled and the bell disabled).
+
+    updateAllControls();
+    return;
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   ROBOT STATE + MAP
+═══════════════════════════════════════════════════ */
+function setRobotState(s) {
+  // Don't change robot state display if in manual mode
+  if (manualMode) return;
+
+  robotState = s;
+  const info = STATE_MAP[s];
+  if (!info) return;
+
+  if (info.pos) {
+    const p = POS[info.pos];
+    document.getElementById('robot-dot').setAttribute('cx', p.cx);
+    document.getElementById('robot-dot').setAttribute('cy', p.cy);
+    document.getElementById('robot-emoji').setAttribute('x', p.cx);
+    document.getElementById('robot-emoji').setAttribute('y', p.cy + 4);
+  }
+
+  document.getElementById('rsb-value').textContent = info.label;
+  document.getElementById('rsb-num').textContent   = `State ${s}`;
+
+  const atT1 = (s === 11 || s === 14 || s === 15 || s === 18 || s === 21);
+  document.getElementById('t1-rect').setAttribute('stroke',
+    atT1 ? 'rgba(0,212,255,0.8)' : 'rgba(0,212,255,0.3)');
+
+  const atT2 = (s === 41 || s === 42 || s === 45 || s === 46);
+  document.getElementById('t2-rect').setAttribute('stroke',
+    atT2 ? 'rgba(0,212,255,0.8)' : 'rgba(0,212,255,0.3)');
+}
+
+function setLed(color, on) {
+  const el = document.getElementById(`led-${color}`);
+  if (on) el.classList.remove('off'); else el.classList.add('off');
+}
+
+/* ── LED Fault Watchdog ──────────────────────────────────────
+   State 30 on /table = fault/E-Stop active (robot keeps sending
+   it repeatedly while the condition persists).
+   • Each 30 received → Red ON, Green OFF, reset 2s timer.
+   • If no 30 arrives for 2s → fault cleared → Green ON, Red OFF.
+   Green is always the default resting state (power indicator).
+───────────────────────────────────────────────────────────── */
+let faultTimer = null;
+
+function handleFaultSignal() {
+  setLed('red',   true);
+  setLed('green', false);
+  if (faultTimer) clearTimeout(faultTimer);
+  faultTimer = setTimeout(() => {
+    setLed('red',   false);
+    setLed('green', true);
+    faultTimer = null;
+  }, 2000);
+}
+
+/* ── Obstacle Watchdog ───────────────────────────────────────
+   State 19 on /table = obstacle detected (robot keeps sending
+   it repeatedly while blocked).
+   • Each 19 received → show red overlay, reset 2s timer.
+   • After 2s of no 19 → switch to green "Avoided" for 2s, then hide.
+───────────────────────────────────────────────────────────── */
+let obstacleTimer   = null;
+let obstacleAvoided = null;
+
+function handleObstacleSignal() {
+  // Show detected state
+  document.getElementById('obs-detected').style.display = '';
+  document.getElementById('obs-avoided').style.display  = 'none';
+  document.getElementById('obstacle-overlay').classList.add('visible');
+  setLed('red', true);
+  setLed('green', false);
+
+  // Reset the watchdog — if no more 19s arrive, obstacle is cleared
+  if (obstacleTimer)   clearTimeout(obstacleTimer);
+  if (obstacleAvoided) clearTimeout(obstacleAvoided);
+
+  obstacleTimer = setTimeout(() => {
+    // Obstacle cleared — show "Avoided" for 2 seconds then hide
+    document.getElementById('obs-detected').style.display = 'none';
+    document.getElementById('obs-avoided').style.display  = '';
+    setLed('red',   false);
+    setLed('green', true);
+
+    obstacleAvoided = setTimeout(() => {
+      document.getElementById('obstacle-overlay').classList.remove('visible');
+      obstacleAvoided = null;
+    }, 2000);
+
+    obstacleTimer = null;
+  }, 2000);
+}
+
+/* ── "Robot at home + stopped" tracker ───────────────────────
+   Drives the enable/disable state of the bell + Table Available
+   buttons. The robot is "at home" only when:
+     - State 0 (idle) or 17 (mission complete), OR
+     - State 18 arrived AFTER a home-return state (12/16/42/46)
+   Any motion / away-from-home state clears the flag.
+   States 19/22 (obstacle) and 30 (fault) DO NOT change it — the
+   robot's position hasn't changed, it's just blocked or halted.
+───────────────────────────────────────────────────────────── */
+let pendingHomeArrival = false;  // set when robot starts heading home (12/16/42/46)
+
+function updateRobotAtHome(n, prevN) {
+  const before = robotAtHome;
+
+  if (n === 0 || n === 17) {
+    robotAtHome = true;
+    pendingHomeArrival = true;  // robot is home — next 18 (if any) stays home
+  }
+  else if ([12, 16, 42, 46].includes(n)) {
+    // Robot heading home — raise flag so next 18 = arrived home
+    pendingHomeArrival = true;
+    robotAtHome = false;
+  }
+  else if (n === 18) {
+    if (pendingHomeArrival) {
+      robotAtHome = true;
+      pendingHomeArrival = false;
+    } else {
+      robotAtHome = false;
+    }
+  }
+  else if ([11, 13, 14, 15, 20, 21, 41, 45].includes(n)) {
+    robotAtHome = false;
+    pendingHomeArrival = false;
+  }
+  // 19, 22, 30 — leave unchanged
+
+  if (before !== robotAtHome) {
+    console.log(`[robotAtHome] ${before} → ${robotAtHome}  (state=${n}, prev=${prevN})`);
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   UI UPDATES
+═══════════════════════════════════════════════════ */
+function updateTableCard() {
+  renderTableCard(1, table1);
+  renderTableCard(2, table2);
+}
+
+function renderTableCard(num, tbl) {
+  const card  = document.getElementById(`tc-${num}`);
+  const badge = document.getElementById(`tc${num}-badge`);
+  const order = document.getElementById(`tc${num}-order`);
+  const total = document.getElementById(`tc${num}-total`);
+  const time  = document.getElementById(`tc${num}-time`);
+
+  card.className  = 'table-card';
+  badge.className = 'tc-badge';
+
+  const statusMap = {
+    empty:            { cardCls:'',                      badgeCls:'badge-empty',           label:'Empty'            },
+    ordered:          { cardCls:'status-ordered',        badgeCls:'badge-ordered',         label:'Ordered'          },
+    paid:             { cardCls:'status-paid',           badgeCls:'badge-paid',            label:'Paid ✓'           },
+    waiting_for_food: { cardCls:'status-pickup',         badgeCls:'badge-pickup',          label:'Waiting for Food' },
+    delivering_food:  { cardCls:'status-delivering',     badgeCls:'badge-delivering',      label:'Delivering Food'  },
+    food_delivered:   { cardCls:'status-paid',           badgeCls:'badge-paid',            label:'Food Delivered ✓' },
+  };
+  const s = statusMap[tbl.status] || statusMap.empty;
+  if (s.cardCls) card.classList.add(s.cardCls);
+  badge.classList.add(s.badgeCls);
+  badge.textContent = s.label;
+
+  if (tbl.order.length === 0) {
+    order.innerHTML = '<div class="tc-order-empty">No active order</div>';
+    total.innerHTML = '—'; time.textContent = '—';
+  } else {
+    order.innerHTML = `<div class="tc-order-list">${
+      tbl.order.map(i => `
+        <div class="tc-order-item">
+          ${i.qty > 1 ? `<span class="toi-qty">×${i.qty}</span>` : ''}
+          <span class="toi-name">${i.name}</span>
+          <span class="toi-price">${i.price} EGP</span>
+        </div>`).join('')
+    }</div>`;
+    total.innerHTML = `Total <strong>${tbl.total} EGP</strong>`;
+    if (tbl.orderTime)
+      time.textContent = tbl.orderTime.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  }
+}
+
+function updateAllControls() {
+  // Bell + Available buttons share the same gating rule:
+  // they can ONLY be pressed when the robot is parked at home and
+  // stopped — never while it's heading somewhere, in the kitchen,
+  // delivering, or returning. This prevents the staff from queueing
+  // a new mission while the robot is already on one.
+  const t1Ready = (table1.status === 'ordered' || table1.status === 'paid');
+  const t2Ready = (table2.status === 'ordered' || table2.status === 'paid');
+  document.getElementById('bell-t1').disabled  = !(t1Ready && robotAtHome);
+  document.getElementById('bell-t2').disabled  = !(t2Ready && robotAtHome);
+  document.getElementById('avail-t1').disabled = !(table1.status === 'food_delivered' && robotAtHome);
+  document.getElementById('avail-t2').disabled = !(table2.status === 'food_delivered' && robotAtHome);
+}
+
+function updateWalletButton() {
+  const total = paymentHistory.reduce((s,e) => s + e.amount, 0);
+  document.getElementById('wallet-count').textContent = `${paymentHistory.length} tx`;
+  document.getElementById('wallet-total-badge').textContent = `${total} EGP`;
+  document.getElementById('wdrawer-count').textContent = paymentHistory.length;
+  document.getElementById('wdrawer-total').textContent = `${total} EGP`;
+}
+
+/* ═══════════════════════════════════════════════════
+   BUTTONS
+═══════════════════════════════════════════════════ */
+function sendBell() {
+  // Bell Table 1 — GUI sends 40, bridge translates to /gui_topic = 4.
+  // 40 is used instead of 4 so it doesn't clash with manual mode's "Turn Left".
+  table1.status = 'waiting_for_food';
+  sendOnce('40');
+  updateTableCard();
+  updateAllControls();
+}
+
+function sendBellT2() {
+  // Bell Table 2 — GUI sends 70, bridge translates to /gui_topic = 7.
+  // 70 is used instead of 7 so it doesn't clash with manual mode's "STOP".
+  table2.status = 'waiting_for_food';
+  sendOnce('70');
+  updateTableCard();
+  updateAllControls();
+}
+
+function sendAvailableT1() {
+  // Table 1 Available — GUI sends 50, bridge translates to /gui_topic = 5.
+  // Tells the robot "T1 customer has left — you may dispatch to T1 again
+  // when the camera sees a new customer there".
+  // Only enabled when T1 is in 'food_delivered' state.
+  if (table1.status !== 'food_delivered') return;
+  sendOnce('50');
+  table1.status = 'empty';
+  table1.order = [];
+  table1.total = 0;
+  table1.orderTime = null;
+  updateTableCard();
+  updateAllControls();
+}
+
+function sendAvailableT2() {
+  // Table 2 Available — GUI sends 80, bridge translates to /gui_topic = 8.
+  if (table2.status !== 'food_delivered') return;
+  sendOnce('80');
+  table2.status = 'empty';
+  table2.order = [];
+  table2.total = 0;
+  table2.orderTime = null;
+  updateTableCard();
+  updateAllControls();
+}
+
+/* ═══════════════════════════════════════════════════
+   WALLET
+═══════════════════════════════════════════════════ */
+function openWallet() {
+  renderWalletList();
+  document.getElementById('wallet-modal').classList.add('visible');
+}
+function closeWallet() {
+  document.getElementById('wallet-modal').classList.remove('visible');
+}
+function renderWalletList() {
+  const list = document.getElementById('wallet-list');
+  if (paymentHistory.length === 0) {
+    list.innerHTML = '<div class="wallet-empty"><div class="wallet-empty-icon">💳</div><div>No payments yet</div></div>';
+    return;
+  }
+  list.innerHTML = paymentHistory.map(e => `
+    <div class="wallet-entry">
+      <div class="we-header"><div class="we-table">Table ${e.table}</div><div class="we-amount">${e.amount} EGP</div></div>
+      <div class="we-time">${e.time.toLocaleString('en-GB',{dateStyle:'short',timeStyle:'short'})}</div>
+      <div class="we-items">${e.items.map(i=>`${i.name} (${i.price} EGP)`).join(' · ')}</div>
+    </div>`).join('');
+}
+
+/* ═══════════════════════════════════════════════════
+   MANUAL MODE — ALL INTEGERS (matches gui_bridge.py /manu topic)
+   1=F, 2=B, 3=R, 4=L, 5=U, 6=D, 7=S, 8=M, 9=E
+
+   Behaviour:
+   - Arrow buttons (1,2,3,4) act as a radio group: click once → keeps
+     sending the command every 200ms until another arrow is clicked,
+     STOP is pressed, or Exit is pressed.
+   - Stepper (5,6) and STOP (7) are single-press: each click sends the
+     number exactly once.
+   - Enter / Exit are also single-press.
+═══════════════════════════════════════════════════ */
+function toggleManual() {
+  if (manualMode) {
+    exitManual();
+  } else {
+    enterManual();
+  }
+}
+
+function enterManual() {
+  manualMode = true;
+  // Send tagged manual format "M:8" instead of raw "8" so the screen
+  // never confuses it with a state number (state 3 = vid1 trigger etc).
+  sendOnce('M:8');
+  document.getElementById('manual-overlay').classList.add('visible');
+  document.getElementById('manual-btn').classList.add('active');
+  document.querySelector('.manual-en').textContent = 'Exit Manual';
+  document.getElementById('rsb-value').textContent = 'MANUAL';
+  document.getElementById('rsb-num').textContent = 'Manual';
+}
+
+function exitManual() {
+  clearActiveDirection();
+  manualMode = false;
+  sendOnce('M:9');
+  document.getElementById('manual-overlay').classList.remove('visible');
+  document.getElementById('manual-btn').classList.remove('active');
+  document.querySelector('.manual-en').textContent = 'Manual Mode';
+  setRobotState(robotState);
+}
+
+/* Internal: kill the repeat timer and clear active styling.
+   Does NOT send anything — used by selectManualDirection and exit. */
+function clearActiveDirection() {
+  if (manualTimer) { clearInterval(manualTimer); manualTimer = null; }
+  manualCmd = null;
+  document.querySelectorAll('.dpad-btn').forEach(b => b.classList.remove('active-dir'));
+}
+
+/* Click an arrow → switch to that direction.
+   If it's the same direction already active, do nothing (no flicker).
+   Otherwise stop the previous direction and start this one. */
+function selectManualDirection(cmd, btnId) {
+  if (!manualMode) return;
+  if (manualCmd === cmd) return;          // already moving this way
+  clearActiveDirection();                  // stop any previous direction
+  manualCmd = cmd;
+  document.getElementById(btnId).classList.add('active-dir');
+  send('M:' + cmd);                        // tagged manual format
+  manualTimer = setInterval(() => send('M:' + cmd), 200);
+}
+
+/* STOP button — single press, sends 'M:7' three times and kills the timer. */
+function manualStopMovement() {
+  if (!manualMode) return;
+  clearActiveDirection();
+  sendOnce('M:7');
+}
+
+/* Stepper buttons — single press, sends three times for reliability. */
+function sendStepperCmd(cmd) {
+  if (!manualMode) return;
+  // STEPPER FIRES ONCE ONLY — the lifting mechanism has top + bottom
+  // end-stops; sending the command repeatedly (sendOnce → 3x) could
+  // ram the motor against the limit and damage it. Use raw send().
+  send('M:' + cmd);
+}
+
+/* ═══════════════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════════════ */
+connectWS();
+setRobotState(0);
+updateTableCard();
+updateAllControls();
+updateWalletButton();
+console.log('[GUI] Ready — ALL INTEGERS — Manual mode OFF');
+</script>
+</body>
+</html>
