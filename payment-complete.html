@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Al Fanan — Payment</title>
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --cyan: #00D4FF; --bg: #0D1117; }
+
+    body {
+      font-family: 'Rajdhani', sans-serif;
+      background: var(--bg);
+      color: #D8E8F0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: #141920;
+      border: 1px solid rgba(0,212,255,0.25);
+      border-radius: 20px;
+      padding: 36px 28px;
+      width: 100%;
+      max-width: 360px;
+      text-align: center;
+      box-shadow: 0 0 32px rgba(0,212,255,0.1);
+    }
+
+    .logo-text {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 6px;
+      color: #fff;
+      text-shadow: 0 0 16px rgba(0,212,255,0.5);
+      margin-bottom: 4px;
+    }
+    .logo-sub {
+      font-size: 10px;
+      letter-spacing: 4px;
+      color: rgba(0,212,255,0.45);
+      text-transform: uppercase;
+      margin-bottom: 28px;
+    }
+    .divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+      margin-bottom: 28px;
+      opacity: 0.4;
+    }
+
+    .amount-label {
+      font-size: 11px;
+      letter-spacing: 5px;
+      color: var(--cyan);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .amount-value {
+      font-size: 52px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 2px;
+      text-shadow: 0 0 18px rgba(0,212,255,0.4);
+      line-height: 1;
+    }
+    .amount-egp {
+      font-size: 16px;
+      color: var(--cyan);
+      letter-spacing: 3px;
+      margin-bottom: 32px;
+    }
+
+    .pay-btn {
+      width: 100%;
+      padding: 18px;
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      background: rgba(0,212,255,0.12);
+      color: #fff;
+      border: 1px solid var(--cyan);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.2s, box-shadow 0.2s, transform 0.1s;
+      position: relative;
+      overflow: hidden;
+    }
+    .pay-btn::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+      opacity: 0.8;
+    }
+    .pay-btn:hover   { background: rgba(0,212,255,0.22); box-shadow: 0 0 20px rgba(0,212,255,0.3); }
+    .pay-btn:active  { transform: scale(0.97); }
+
+    /* Success state */
+    .success {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      padding: 20px 0 10px;
+    }
+    .success-ring {
+      width: 90px; height: 90px;
+      border-radius: 50%;
+      border: 3px solid var(--cyan);
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 0 28px rgba(0,212,255,0.4);
+      font-size: 40px;
+      animation: pop .4s cubic-bezier(.34,1.56,.64,1) both;
+    }
+    @keyframes pop { from{transform:scale(0);opacity:0} to{transform:scale(1);opacity:1} }
+    .success-title {
+      font-size: 24px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      text-shadow: 0 0 16px rgba(0,212,255,0.5);
+    }
+    .success-sub {
+      font-size: 13px;
+      color: rgba(216,232,240,0.5);
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo-text">AL FANAN</div>
+    <div class="logo-sub">Restaurant</div>
+    <div class="divider"></div>
+
+    <!-- Payment section -->
+    <div id="paySection">
+      <div class="amount-label">Total Amount Due</div>
+      <div class="amount-value" id="amountDisplay">0</div>
+      <div class="amount-egp">EGP</div>
+      <button class="pay-btn" id="payBtn" onclick="confirmPayment()">
+        ✓ &nbsp; Confirm Payment
+      </button>
+    </div>
+
+    <!-- Success section -->
+    <div class="success" id="successSection">
+      <div class="success-ring">✓</div>
+      <div class="success-title">Payment Sent!</div>
+      <div class="success-sub">Thank you — enjoy your meal</div>
+    </div>
+  </div>
+
+  <script>
+    // Read amount from URL: ?amount=450
+    const urlParams = new URLSearchParams(window.location.search);
+    const amount = urlParams.get('amount') || '0';
+    document.getElementById('amountDisplay').textContent = amount;
+
+    // Connect to Pi's WebSocket server
+    // window.location.hostname automatically gets the Pi's IP
+    const ws = new WebSocket(`ws://${window.location.hostname}:8765`);
+
+    function confirmPayment() {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send('paid');
+        document.getElementById('paySection').style.display    = 'none';
+        document.getElementById('successSection').style.display = 'flex';
+      } else {
+        alert('Connecting to server... please wait a moment and try again.');
+      }
+    }
+
+    // Disable button until connected
+    ws.onopen  = () => { document.getElementById('payBtn').disabled = false; };
+    ws.onclose = () => { document.getElementById('payBtn').disabled = true;  };
+
+    // Disable initially while connecting
+    document.getElementById('payBtn').disabled = true;
+    document.getElementById('payBtn').textContent = 'Connecting...';
+    ws.onopen = () => {
+      document.getElementById('payBtn').disabled    = false;
+      document.getElementById('payBtn').textContent = '✓  Confirm Payment';
+    };
+  </script>
+</body>
+</html>
