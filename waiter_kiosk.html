@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1024, height=600, initial-scale=1.0, user-scalable=no">
+  <title>Al Fanan Restaurant Kiosk</title>
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+    :root {
+      --cyan:#00D4FF; --cyan-mid:#0099CC; --cyan-glow:rgba(0,212,255,0.35);
+      --bg:#0D1117; --bg2:#141920; --silver:#D8E8F0;
+      --silver-dim:rgba(216,232,240,0.55); --white:#FFFFFF;
+      --font-en:'Rajdhani',sans-serif; --font-ar:'Tajawal',Arial,sans-serif;
+    }
+    html,body { width:1024px; height:600px; overflow:hidden; background:var(--bg); color:var(--silver); cursor:default; user-select:none; }
+
+    .screen { position:absolute; inset:0; width:1024px; height:600px; display:flex; flex-direction:column; align-items:center; justify-content:center; opacity:0; pointer-events:none; transition:opacity 0.65s ease; }
+    .screen.active { opacity:1; pointer-events:all; }
+    .video-screen { background:#000; }
+    .video-screen video { width:1024px; height:600px; object-fit:cover; display:block; }
+
+    .logo-bg, .dark-bg { position:absolute; inset:0; pointer-events:none; z-index:0; }
+    .logo-bg { background: radial-gradient(ellipse at center,rgba(13,17,23,0.40) 0%,rgba(13,17,23,0.91) 72%), url('logo.png') center center/420px auto no-repeat, linear-gradient(140deg,#0D1117 0%,#141C26 50%,#0D1117 100%); }
+    .dark-bg { background:linear-gradient(140deg,#0D1117 0%,#141C26 50%,#0D1117 100%); }
+    .dark-bg::after, .logo-bg::after { content:''; position:absolute; inset:0; background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,212,255,0.016) 3px,rgba(0,212,255,0.016) 4px); pointer-events:none; }
+
+    .brackets { position:absolute; inset:12px; pointer-events:none; z-index:1; }
+    .brackets span { position:absolute; width:26px; height:26px; border-color:var(--cyan-mid); border-style:solid; opacity:0.55; }
+    .brackets span:nth-child(1){top:0;left:0;border-width:2px 0 0 2px;}
+    .brackets span:nth-child(2){top:0;right:0;border-width:2px 2px 0 0;}
+    .brackets span:nth-child(3){bottom:0;left:0;border-width:0 0 2px 2px;}
+    .brackets span:nth-child(4){bottom:0;right:0;border-width:0 2px 2px 0;}
+
+    .status-screen>* { position:relative; z-index:2; text-align:center; }
+    .status-icon { font-size:62px; margin-bottom:18px; animation:float 2s ease-in-out infinite; }
+    @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+    .status-title-en { font-family:var(--font-en); font-size:36px; font-weight:700; color:var(--white); letter-spacing:5px; text-transform:uppercase; text-shadow:0 0 28px rgba(0,212,255,0.5); margin-bottom:6px; }
+    .status-title-ar { font-family:var(--font-ar); font-size:20px; color:var(--silver-dim); margin-bottom:28px; }
+    .status-dots { display:flex; gap:10px; justify-content:center; margin-bottom:24px; }
+    .status-dots span { width:8px; height:8px; border-radius:50%; background:rgba(0,212,255,0.25); animation:dot-pulse 1.4s ease-in-out infinite; }
+    .status-dots span:nth-child(2) { animation-delay:.22s; }
+    .status-dots span:nth-child(3) { animation-delay:.44s; }
+    @keyframes dot-pulse{0%,100%{background:rgba(0,212,255,0.2);transform:scale(1)}50%{background:var(--cyan);transform:scale(1.4);box-shadow:0 0 8px var(--cyan-glow)}}
+    .countdown-bar-wrap { width:320px; height:4px; background:rgba(0,212,255,0.12); border-radius:2px; overflow:hidden; position:relative; margin:0 auto; }
+    .countdown-bar { position:absolute; left:0; top:0; height:100%; width:40%; background:linear-gradient(90deg,transparent,var(--cyan),transparent); animation:loading-slide 1.5s infinite linear; box-shadow:0 0 8px var(--cyan-glow); }
+    @keyframes loading-slide { 0%{left:-40%} 100%{left:100%} }
+
+    #s-idle { background:var(--bg); }
+    #s-idle>.idle-content { position:relative; z-index:2; display:flex; flex-direction:column; align-items:center; }
+    .idle-logo { height:260px; object-fit:contain; animation:logo-glow 3s ease-in-out infinite; }
+    @keyframes logo-glow{0%,100%{filter:drop-shadow(0 0 20px rgba(0,212,255,0.25))}50%{filter:drop-shadow(0 0 44px rgba(0,212,255,0.55))}}
+    .idle-tagline { font-family:var(--font-en); font-size:12px; letter-spacing:8px; color:rgba(0,212,255,0.35); text-transform:uppercase; margin-top:16px; }
+
+    #s-food { padding:0; justify-content:flex-start; }
+    #s-food>* { position:relative; z-index:2; width:100%; }
+    .menu-topbar { display:flex; align-items:center; justify-content:space-between; padding:10px 20px 0 20px; width:100%; flex-shrink:0; }
+    .topbar-logo { height:44px; object-fit:contain; filter:drop-shadow(0 0 10px rgba(0,212,255,0.5)); flex-shrink:0; }
+    .cuisine-title-wrap { display:flex; flex-direction:column; align-items:center; flex:1; }
+    .cuisine-flag { font-size:24px; line-height:1; }
+    .cuisine-name-en { font-family:var(--font-en); font-size:22px; font-weight:700; color:var(--white); letter-spacing:3px; text-transform:uppercase; text-shadow:0 0 18px rgba(0,212,255,0.4); line-height:1.1; }
+    .cuisine-name-ar { font-family:var(--font-ar); font-size:13px; color:var(--silver-dim); }
+    .table-badge-menu { font-family:var(--font-en); font-size:11px; letter-spacing:4px; color:var(--cyan); text-transform:uppercase; background:rgba(0,212,255,0.1); border:1px solid rgba(0,212,255,0.3); border-radius:6px; padding:3px 12px; flex-shrink:0; }
+    .dot-track { display:flex; gap:7px; flex-shrink:0; align-items:center; }
+    .dot { width:7px; height:7px; border-radius:50%; background:rgba(0,212,255,0.2); border:1px solid rgba(0,212,255,0.3); transition:background .3s,box-shadow .3s; }
+    .dot.active { background:var(--cyan); box-shadow:0 0 8px var(--cyan-glow); }
+    .menu-divider { width:calc(100% - 40px); height:1px; background:linear-gradient(90deg,transparent,var(--cyan),transparent); box-shadow:0 0 8px var(--cyan-glow); margin:6px 20px 0; flex-shrink:0; }
+    .menu-body { display:flex; align-items:stretch; padding:8px 10px 8px 20px; gap:8px; width:100%; flex:1; min-height:0; }
+    .dishes-col { display:flex; flex-direction:column; gap:7px; flex:1; min-height:0; }
+    .dish-card { background:rgba(20,25,32,0.82); border:1px solid rgba(0,153,204,0.22); border-radius:10px; padding:0 14px; cursor:pointer; display:flex; align-items:center; gap:12px; height:72px; flex-shrink:0; transition:border-color .16s,background .16s,transform .12s,box-shadow .16s; position:relative; overflow:hidden; backdrop-filter:blur(4px); }
+    .dish-card::before { content:''; position:absolute; left:0; top:18%; bottom:18%; width:3px; background:var(--cyan-mid); border-radius:0 2px 2px 0; opacity:0.45; }
+    .dish-card.in-cart { border-color:rgba(0,212,255,0.55); background:rgba(0,212,255,0.07); }
+    .dish-card:hover  { border-color:rgba(0,153,204,0.5); }
+    .dish-card:active { transform:scale(0.975); border-color:var(--cyan); background:rgba(0,212,255,0.12); box-shadow:0 0 16px rgba(0,212,255,0.25); }
+    .dish-num { font-family:var(--font-en); font-size:20px; font-weight:700; color:rgba(0,212,255,0.35); flex-shrink:0; width:22px; text-align:center; }
+    .dish-icon-sm { font-size:26px; flex-shrink:0; }
+    .dish-text { flex:1; min-width:0; }
+    .dish-name-en { font-family:var(--font-en); font-size:16px; font-weight:600; color:var(--white); letter-spacing:.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .dish-name-ar { font-family:var(--font-ar); font-size:12px; color:var(--silver-dim); margin-top:1px; direction:rtl; }
+    .dish-price-tag { font-family:var(--font-en); font-size:16px; font-weight:700; color:var(--cyan); flex-shrink:0; text-shadow:0 0 8px rgba(0,212,255,0.45); text-align:right; }
+    .dish-price-tag span { display:block; font-size:10px; font-weight:400; color:var(--silver-dim); letter-spacing:1px; text-shadow:none; }
+    .qty-badge { position:absolute; top:8px; right:8px; background:var(--cyan); color:#0D1117; font-family:var(--font-en); font-size:12px; font-weight:700; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; box-shadow:0 0 8px var(--cyan-glow); opacity:0; transform:scale(0); transition:opacity .2s,transform .2s; }
+    .dish-card.in-cart .qty-badge { opacity:1; transform:scale(1); }
+    .nav-col { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; flex-shrink:0; width:58px; }
+    .nav-btn { width:50px; height:100px; background:rgba(20,25,32,0.82); border:1px solid rgba(0,153,204,0.28); border-radius:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:5px; backdrop-filter:blur(4px); transition:border-color .16s,background .16s,transform .12s,box-shadow .16s; }
+    .nav-btn:hover  { border-color:rgba(0,153,204,0.5); }
+    .nav-btn:active { transform:scale(0.94); border-color:var(--cyan); box-shadow:0 0 16px rgba(0,212,255,0.3); background:rgba(0,212,255,0.1); }
+    .nav-arrow { font-size:20px; color:var(--cyan); }
+    .nav-label { font-family:var(--font-en); font-size:9px; font-weight:600; letter-spacing:2px; color:var(--silver-dim); text-transform:uppercase; writing-mode:vertical-rl; text-orientation:mixed; transform:rotate(180deg); }
+    .order-footer { display:flex; align-items:center; justify-content:space-between; padding:8px 20px; flex-shrink:0; width:100%; border-top:1px solid rgba(0,153,204,0.2); background:rgba(13,17,23,0.6); backdrop-filter:blur(8px); }
+    .cart-summary { font-family:var(--font-en); font-size:14px; color:var(--silver-dim); letter-spacing:1px; }
+    .cart-summary strong { color:var(--cyan); font-size:18px; }
+    .order-btn { height:44px; padding:0 32px; border-radius:10px; border:1px solid var(--cyan-mid); background:rgba(0,212,255,0.1); cursor:pointer; display:flex; align-items:center; gap:10px; font-family:var(--font-en); font-size:17px; font-weight:700; color:var(--white); letter-spacing:2px; text-transform:uppercase; transition:background .18s,box-shadow .18s,transform .12s; position:relative; overflow:hidden; }
+    .order-btn::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,transparent,var(--cyan),transparent); opacity:0.7; }
+    .order-btn:hover  { background:rgba(0,212,255,0.18); box-shadow:0 0 16px rgba(0,212,255,0.25); }
+    .order-btn:active { transform:scale(0.96); background:rgba(0,212,255,0.25); }
+    .order-btn:disabled { opacity:0.35; cursor:default; pointer-events:none; }
+    .order-btn-badge { background:var(--cyan); color:#0D1117; font-size:13px; font-weight:700; width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
+
+    @keyframes slide-in-left  { from{opacity:0;transform:translateX(40px)} to{opacity:1;transform:none} }
+    @keyframes slide-in-right { from{opacity:0;transform:translateX(-40px)} to{opacity:1;transform:none} }
+    @keyframes slide-out-left  { from{opacity:1;transform:none} to{opacity:0;transform:translateX(-40px)} }
+    @keyframes slide-out-right { from{opacity:1;transform:none} to{opacity:0;transform:translateX(40px)} }
+    .slide-in-left  { animation:slide-in-left  .3s ease both; }
+    .slide-in-right { animation:slide-in-right .3s ease both; }
+    .slide-out-left  { animation:slide-out-left  .28s ease both; }
+    .slide-out-right { animation:slide-out-right .28s ease both; }
+
+    #s-summary { padding:0; justify-content:flex-start; }
+    #s-summary>* { position:relative; z-index:2; width:100%; }
+    .summary-topbar { display:flex; align-items:center; justify-content:space-between; padding:14px 24px; flex-shrink:0; }
+    .summary-topbar img { height:44px; object-fit:contain; filter:drop-shadow(0 0 10px rgba(0,212,255,0.5)); }
+    .summary-title { font-family:var(--font-en); font-size:26px; font-weight:700; color:var(--white); letter-spacing:4px; text-transform:uppercase; text-shadow:0 0 18px rgba(0,212,255,0.4); }
+    .summary-title-ar { font-family:var(--font-ar); font-size:15px; color:var(--silver-dim); text-align:right; }
+    .summary-divider { width:calc(100% - 48px); height:1px; background:linear-gradient(90deg,transparent,var(--cyan),transparent); box-shadow:0 0 8px var(--cyan-glow); margin:0 24px; flex-shrink:0; }
+    .summary-list { flex:1; overflow:hidden; padding:10px 24px 0; display:flex; flex-direction:column; gap:8px; min-height:0; }
+    .summary-row { background:rgba(20,25,32,0.82); border:1px solid rgba(0,153,204,0.22); border-radius:10px; padding:0 16px; height:64px; flex-shrink:0; display:flex; align-items:center; gap:14px; backdrop-filter:blur(4px); position:relative; }
+    .summary-row::before { content:''; position:absolute; left:0; top:18%; bottom:18%; width:3px; background:var(--cyan-mid); border-radius:0 2px 2px 0; opacity:0.45; }
+    .sr-icon  { font-size:26px; flex-shrink:0; }
+    .sr-text  { flex:1; min-width:0; }
+    .sr-en    { font-family:var(--font-en); font-size:16px; font-weight:600; color:var(--white); }
+    .sr-ar    { font-family:var(--font-ar); font-size:12px; color:var(--silver-dim); direction:rtl; }
+    .sr-right { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+    .sr-qty   { font-family:var(--font-en); font-size:13px; color:var(--silver-dim); background:rgba(0,212,255,0.1); border:1px solid rgba(0,212,255,0.2); border-radius:6px; padding:2px 10px; }
+    .sr-price { font-family:var(--font-en); font-size:17px; font-weight:700; color:var(--cyan); text-shadow:0 0 8px rgba(0,212,255,0.45); min-width:90px; text-align:right; }
+    .summary-footer { display:flex; align-items:center; justify-content:space-between; padding:10px 24px 12px; flex-shrink:0; border-top:1px solid rgba(0,153,204,0.2); background:rgba(13,17,23,0.6); backdrop-filter:blur(8px); }
+    .total-wrap { display:flex; flex-direction:column; }
+    .total-label  { font-family:var(--font-en); font-size:10px; letter-spacing:5px; color:var(--cyan); text-transform:uppercase; }
+    .total-amount { font-family:var(--font-en); font-size:32px; font-weight:700; color:var(--white); text-shadow:0 0 14px rgba(0,212,255,0.4); letter-spacing:2px; }
+    .total-items  { font-family:var(--font-en); font-size:12px; color:var(--silver-dim); }
+    .complete-btn { height:52px; padding:0 36px; border-radius:12px; border:1px solid var(--cyan-mid); background:rgba(0,212,255,0.12); cursor:pointer; display:flex; align-items:center; gap:12px; font-family:var(--font-en); font-size:18px; font-weight:700; color:var(--white); letter-spacing:3px; text-transform:uppercase; transition:background .18s,box-shadow .18s,transform .12s; position:relative; overflow:hidden; }
+    .complete-btn::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,transparent,var(--cyan),transparent); opacity:0.8; }
+    .complete-btn:hover  { background:rgba(0,212,255,0.22); box-shadow:0 0 20px rgba(0,212,255,0.3); }
+    .complete-btn:active { transform:scale(0.96); }
+
+    #s-qr { flex-direction:row; align-items:stretch; padding:0; }
+    #s-qr>* { position:relative; z-index:2; }
+    .qr-left { flex:1; display:flex; flex-direction:column; justify-content:center; padding:40px 32px 40px 48px; gap:18px; }
+    .qr-tag { font-family:var(--font-en); font-size:11px; letter-spacing:6px; color:var(--cyan); text-transform:uppercase; }
+    .qr-title { font-family:var(--font-en); font-size:38px; font-weight:700; color:var(--white); letter-spacing:3px; text-transform:uppercase; text-shadow:0 0 18px rgba(0,212,255,0.4); line-height:1; }
+    .qr-title-ar { font-family:var(--font-ar); font-size:20px; color:var(--silver-dim); }
+    .qr-amount-box { background:rgba(20,25,32,0.85); border:1px solid rgba(0,153,204,0.28); border-radius:10px; padding:16px 24px; backdrop-filter:blur(4px); }
+    .qr-amount-lbl { font-family:var(--font-en); font-size:10px; letter-spacing:5px; color:var(--cyan); text-transform:uppercase; }
+    .qr-amount-num { font-family:var(--font-en); font-size:42px; font-weight:700; color:var(--white); letter-spacing:2px; text-shadow:0 0 14px rgba(0,212,255,0.4); }
+    .qr-amount-egp { font-family:var(--font-en); font-size:14px; color:var(--cyan); letter-spacing:3px; }
+    .qr-instapay { display:flex; align-items:center; gap:10px; }
+    .qr-instapay-icon { font-size:26px; }
+    .qr-instapay-en { font-family:var(--font-en); font-size:15px; font-weight:700; color:var(--white); }
+    .qr-instapay-ar { font-family:var(--font-ar); font-size:13px; color:var(--silver-dim); margin-top:2px; }
+    .qr-right { width:280px; flex-shrink:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:28px; border-left:1px solid rgba(0,153,204,0.15); }
+    .qr-box { background:#fff; border-radius:14px; padding:12px; box-shadow:0 0 28px rgba(0,212,255,0.2); }
+    .qr-hint-en { font-family:var(--font-en); font-size:12px; letter-spacing:2px; color:var(--silver-dim); text-transform:uppercase; text-align:center; }
+    .qr-hint-ar { font-family:var(--font-ar); font-size:13px; color:rgba(216,232,240,0.35); text-align:center; }
+    .qr-dots { display:flex; gap:8px; justify-content:center; }
+    .qr-dots span { width:7px; height:7px; border-radius:50%; background:rgba(0,212,255,0.25); animation:dot-pulse 1.4s ease-in-out infinite; }
+    .qr-dots span:nth-child(2){ animation-delay:.22s; }
+    .qr-dots span:nth-child(3){ animation-delay:.44s; }
+
+    #s-paid>* { position:relative; z-index:2; text-align:center; }
+    .paid-ring-wrap { position:relative; width:120px; height:120px; display:flex; align-items:center; justify-content:center; margin:0 auto 20px; }
+    .paid-ring { position:absolute; width:140px; height:140px; border-radius:50%; border:2px solid rgba(0,212,255,0.3); animation:ring-out 1.6s .5s ease-out infinite; }
+    @keyframes ring-out{from{transform:scale(1);opacity:.6}to{transform:scale(1.9);opacity:0}}
+    .paid-circle { width:120px; height:120px; border-radius:50%; border:3px solid var(--cyan); display:flex; align-items:center; justify-content:center; box-shadow:0 0 36px rgba(0,212,255,0.4); animation:pop .5s cubic-bezier(.34,1.56,.64,1) both; }
+    @keyframes pop{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
+    .paid-check { font-size:54px; line-height:1; animation:pop .55s .1s cubic-bezier(.34,1.56,.64,1) both; }
+    .paid-title-en { font-family:var(--font-en); font-size:36px; font-weight:700; color:var(--white); letter-spacing:4px; text-transform:uppercase; text-shadow:0 0 28px rgba(0,212,255,0.5); animation:fade-up .5s .3s ease both; }
+    .paid-title-ar { font-family:var(--font-ar); font-size:20px; color:var(--silver-dim); margin-top:6px; animation:fade-up .5s .4s ease both; }
+    .paid-amount { font-family:var(--font-en); font-size:30px; font-weight:700; color:var(--cyan); letter-spacing:3px; text-shadow:0 0 14px rgba(0,212,255,0.5); margin-top:14px; animation:fade-up .5s .5s ease both; }
+    @keyframes fade-up{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+
+    #s-choice { flex-direction:column; gap:0; }
+    #s-choice>* { position:relative; z-index:2; }
+    .choice-header { text-align:center; padding:22px 0 16px; }
+    .choice-tag { font-family:var(--font-en); font-size:10px; letter-spacing:6px; color:var(--cyan); text-transform:uppercase; opacity:.7; margin-bottom:8px; }
+    .choice-main-en { font-family:var(--font-en); font-size:34px; font-weight:700; color:var(--white); letter-spacing:5px; text-transform:uppercase; text-shadow:0 0 22px rgba(0,212,255,0.45); margin-bottom:5px; }
+    .choice-main-ar { font-family:var(--font-ar); font-size:19px; color:var(--silver-dim); }
+    .choice-cards { display:flex; gap:40px; padding:0 60px; margin-top:24px; }
+    .choice-card { flex:1; height:340px; border-radius:22px; border:1px solid rgba(0,153,204,0.3); background:rgba(20,25,32,0.88); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:28px; padding:36px 20px; transition:border-color .2s,background .2s,transform .15s,box-shadow .2s; position:relative; overflow:hidden; backdrop-filter:blur(6px); }
+    .choice-card::before { content:''; position:absolute; top:0; left:10%; right:10%; height:2px; background:linear-gradient(90deg,transparent,var(--cyan-mid),transparent); opacity:0.6; }
+    .choice-card:hover { border-color:rgba(0,212,255,0.6); background:rgba(0,212,255,0.1); box-shadow:0 0 30px rgba(0,212,255,0.2); transform:translateY(-3px); }
+    .choice-card:active { transform:scale(0.97) translateY(0); }
+    .choice-card-icon { font-size:96px; line-height:1; filter:drop-shadow(0 4px 12px rgba(0,0,0,0.5)); }
+    .choice-card-en { font-family:var(--font-en); font-size:34px; font-weight:700; color:var(--white); letter-spacing:5px; text-transform:uppercase; text-shadow:0 0 14px rgba(0,212,255,0.35); }
+    .choice-card-ar { font-family:var(--font-ar); font-size:22px; color:var(--silver-dim); margin-top:-12px; }
+    .done-card::before { background:linear-gradient(90deg,transparent,rgba(200,80,80,0.4),transparent); }
+    .done-card:hover { border-color:rgba(255,80,80,0.45); background:rgba(255,50,50,0.06); box-shadow:0 0 30px rgba(255,50,50,0.1); }
+
+    .tap-flash { position:fixed; inset:0; background:rgba(0,212,255,0.08); pointer-events:none; opacity:0; transition:opacity .1s; z-index:999; }
+    .tap-flash.flash { opacity:1; }
+/* ═══════════════════════════════════════════════════
+   MANUAL MODE OVERLAY — styled to match a .screen.status-screen
+   so it sits perfectly inside the 1024×600 kiosk frame just like
+   the loading screens. Higher z-index so it floats on top of any
+   currently-active screen without removing it underneath.
+═══════════════════════════════════════════════════ */
+#manual-overlay {
+  position: absolute;
+  inset: 0;
+  width: 1024px;
+  height: 600px;
+  /* Solid gradient background — fully opaque, mirrors .dark-bg.
+     This MUST live on the overlay itself (not on a child) because
+     the broad ".status-screen>*" pattern would otherwise collapse a
+     child .dark-bg to position:relative and it would render at 0x0. */
+  background: linear-gradient(140deg, #0D1117 0%, #141C26 50%, #0D1117 100%);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 9000;
+  font-family: var(--font-en);
+}
+#manual-overlay.visible { display: flex; }
+
+/* Subtle scanline texture, same as .dark-bg::after */
+#manual-overlay::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,212,255,0.016) 3px, rgba(0,212,255,0.016) 4px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Corner brackets — keep absolute positioning, don't get collapsed */
+#manual-overlay > .brackets { position: absolute; inset: 12px; pointer-events: none; z-index: 1; }
+
+/* Only the actual content elements get pushed above the background.
+   Important: this is NOT "> *" because that would collapse the brackets too. */
+#manual-overlay > .mo-banner,
+#manual-overlay > .mo-icon,
+#manual-overlay > .mo-action-en,
+#manual-overlay > .mo-action-ar {
+  position: relative;
+  z-index: 2;
+  text-align: center;
+}
+
+.mo-banner {
+  letter-spacing: 8px;
+  font-size: 18px;
+  color: rgba(0,212,255,0.85);
+  text-transform: uppercase;
+  margin-bottom: 18px;
+  border: 1px solid rgba(0,212,255,0.45);
+  padding: 8px 28px;
+  border-radius: 6px;
+  background: rgba(0,212,255,0.08);
+  text-shadow: 0 0 14px rgba(0,212,255,0.5);
+}
+.mo-icon {
+  font-size: 140px;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 0 40px rgba(0,212,255,0.6);
+  animation: moPulse 1.2s ease-in-out infinite;
+  margin-bottom: 14px;
+}
+@keyframes moPulse {
+  0%,100% { transform: scale(1);    opacity: 1;   }
+  50%     { transform: scale(1.07); opacity: 0.85; }
+}
+.mo-action-en {
+  font-size: 36px;
+  letter-spacing: 6px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow: 0 0 18px rgba(0,212,255,0.5);
+  margin-top: 6px;
+}
+.mo-action-ar {
+  font-family: var(--font-ar, 'Cairo', sans-serif);
+  font-size: 22px;
+  color: rgba(216,232,240,0.65);
+  letter-spacing: 2px;
+  margin-top: 6px;
+}
+.mo-stop .mo-icon,
+.mo-stop .mo-action-en {
+  color: #ff5a5a;
+  text-shadow: 0 0 22px rgba(255,90,90,0.65);
+}
+.mo-stop .mo-banner {
+  color: #ff7a7a;
+  border-color: rgba(255,90,90,0.55);
+  background: rgba(255,90,90,0.10);
+  text-shadow: 0 0 14px rgba(255,90,90,0.55);
+}
+
+/* Subtle Table 2 accent — warm gold tint instead of cyan */
+body.t2-active .menu-table-badge,
+body.t2-active #menuTableBadge {
+  background: linear-gradient(90deg, rgba(212,165,116,0.22), rgba(212,165,116,0.10));
+  color: #ffd9a8;
+  border-color: rgba(212,165,116,0.55);
+  text-shadow: 0 0 10px rgba(212,165,116,0.4);
+}
+
+  </style>
+</head>
+<body>
+<div class="tap-flash" id="tapFlash"></div>
+
+<!-- ════════════════ MANUAL MODE OVERLAY ════════════════
+     Driven by "M:N" messages from the kitchen GUI.
+     Sized + styled to match a .screen.status-screen so it sits
+     perfectly in the kiosk frame. Higher z-index so it floats
+     on top of whatever screen is currently active. -->
+<div id="manual-overlay">
+  <div class="brackets"><span></span><span></span><span></span><span></span></div>
+  <div class="mo-banner" id="moBanner">MANUAL MODE</div>
+  <div class="mo-icon" id="moIcon">⚙️</div>
+  <div class="mo-action-en" id="moActionEn">Manual Mode Active</div>
+  <div class="mo-action-ar" id="moActionAr">وضع التحكم اليدوي</div>
+</div>
+
+<!-- ════════════════ SCREENS ════════════════ -->
+
+<!-- IDLE -->
+<div id="s-idle" class="screen active">
+  <div class="dark-bg"></div>
+  <div class="brackets"><span></span><span></span><span></span><span></span></div>
+  <div class="idle-content">
+    <img src="logo.png" class="idle-logo" alt="Al Fanan">
+    <div class="idle-tagline">Al Fanan Restaurant</div>
+  </div>
+</div>
+
+<!-- LOADING SCREEN -->
+<div id="s-loading" class="screen status-screen">
+  <div class="dark-bg"></div>
+  <div class="brackets"><span></span><span></span><span></span><span></span></div>
+  <div id="loadingIcon" class="status-icon">🤖</div>
+  <div id="loadingTitleEn" class="status-title-en">Please Wait</div>
+  <div id="loadingTitleAr" class="status-title-ar">انتظر من فضلك</div>
+  <div class="status-dots"><span></span><span></span><span></span></div>
+  <div class="countdown-bar-wrap"><div class="countdown-bar"></div></div>
+</div>
+
+<!-- VIDEO 1 — Welcome (first visit) -->
+<div id="s-vid1" class="screen video-screen">
+  <video id="vid1" src="video1.mp4" playsinline preload="auto"></video>
+</div>
+
+<!-- VIDEO 6 — Welcome back (re-order) -->
+<div id="s-vid6" class="screen video-screen">
+  <video id="vid6" src="video6.mp4" playsinline preload="auto"></video>
+</div>
+
+<!-- FOOD MENU -->
+<div id="s-food" class="screen">
+  <div class="logo-bg"></div>
+  <div class="brackets"><span></span><span></span><span></span><span></span></div>
+  <div class="menu-topbar">
+    <img src="logo.png" class="topbar-logo" alt="Al Fanan">
+    <div class="cuisine-title-wrap">
+      <span class="cuisine-flag" id="cuisineFlag"></span>
+      <div class="cuisine-name-en" id="cuisineNameEn"></div>
+      <div class="cuisine-name-ar" id="cuisineNameAr"></div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
+      <div class="table-badge-menu" id="menuTableBadge">Table 1</div>
+      <div class="dot-track" id="dotTrack"></div>
+    </div>
+  </div>
+  <div class="menu-divider"></div>
+  <div class="menu-body">
+    <div class="dishes-col" id="dishesCol"></div>
+    <div class="nav-col">
+      <button class="nav-btn" id="prevBtn" onclick="navigate(-1)"><span class="nav-arrow">◀</span><span class="nav-label">Prev</span></button>
+      <button class="nav-btn" id="nextBtn" onclick="navigate(1)"><span class="nav-arrow">▶</span><span class="nav-label">Next</span></button>
+    </div>
+  </div>
+  <div class="order-footer">
+    <div class="cart-summary"><span id="cartSummaryText">No items selected yet</span></div>
+    <button class="order-btn" id="orderBtn" onclick="openSummary()" disabled>
+      <span>Order</span><span class="order-btn-badge" id="orderBadge">0</span><span>اطلب</span>
+    </button>
+  </div>
+</div>
+
+<!-- ORDER SUMMARY -->
+<div id="s-summary" class="screen">
+  <div class="logo-bg"></div>
+  <div class="brackets"><span></span><span></span><span></span><span></span></div>
+  <div class="summary-topbar">
+    <img src="logo.png" alt="Al Fanan">
+    <div>
+      <div class="summary-title">Your Order</div>
+      <div class="summary-title-ar">ملخص طلبك</div>
+    </div>
+  </div>
+  <div class="summary-divider"></div>
+  <div class="summary-list" id="summaryList"></div>
+  <div class="summary-footer">
+    <div class="total-wrap">
+      <div class="total-label">Total</div>
+      <div class="total-amount" id="totalAmount">0 EGP</div>
+      <div class="total-items" id="totalItems">0 items</div>
+    </div>
+    <button class="complete-btn" onclick="completeOrder()">
+      Confirm Order &nbsp; أكمل الطلب ✓
+    </button>
+  </div>
+</div>
+
+<!-- VIDEO 2 — Order confirmed -->
+<div id="s-vid2" class="screen video-screen">
+  <video id="vid2" src="video2.mp4" playsinline preload="auto"></video>
+</div>
+
+<!-- QR PAYMENT -->
+<div id="s-qr" class="screen">
+  <div class="logo-bg"></div>
+  <div class="brackets"><span></span><span></span><span></span><span></span></div>
+  <div class="qr-left">
+    <div class="qr-tag">Scan to pay · امسح للدفع</div>
+    <div class="qr-title">Payment</div>
+    <div class="qr-title-ar">ادفع عبر إنستاباي</div>
+    <div class="qr-amount-box">
+      <div class="qr-amount-lbl">Amount Due</div>
+      <div class="qr-amount-num" id="qrTotal">0</div>
+      <div class="qr-amount-egp">EGP</div>
+    </div>
+    <div class="qr-instapay">
+      <span class="qr-instapay-icon">📱</span>
+      <div>
+        <div class="qr-instapay-en">Pay via InstaPay</div>
+        <div class="qr-instapay-ar">ادفع عبر إنستاباي</div>
+      </div>
+    </div>
+  </div>
+  <div class="qr-right">
+    <div class="qr-box" id="qrBox"></div>
+    <div class="qr-hint-en">Scan with your phone</div>
+    <div class="qr-hint-ar">امسح بهاتفك</div>
+    <div class="qr-dots"><span></span><span></span><span></span></div>
+  </div>
+</div>
+
+<!-- PAYMENT CONFIRMED -->
+<div id="s-paid" class="screen">
+  <div class="logo-bg"></div>
+  <div class="brackets"><span></span><span></span><span></span><span></span></div>
+  <div class="paid-ring-wrap"><div class="paid-ring"></div><div class="paid-circle"><span class="paid-check">✓</span></div></div>
+  <div class="paid-title-en">Payment Complete</div>
+  <div class="paid-title-ar">تم الدفع بنجاح</div>
+  <div class="paid-amount" id="paidAmount"></div>
+</div>
+
+<!-- VIDEO 5 — Payment success -->
+<div id="s-vid5" class="screen video-screen">
+  <video id="vid5" src="video5.mp4" playsinline preload="auto"></video>
+</div>
+
+<!-- VIDEO 3 — Food arrived -->
+<div id="s-vid3" class="screen video-screen">
+  <video id="vid3" src="video3.mp4" playsinline preload="auto"></video>
+</div>
+
+<!-- VIDEO 4 — Thank you (I'm Done) -->
+<div id="s-vid4" class="screen video-screen">
+  <video id="vid4" src="video4.mp4" playsinline preload="auto"></video>
+</div>
+
+<!-- CHOICE SCREEN -->
+<div id="s-choice" class="screen">
+  <div class="logo-bg"></div>
+  <div class="brackets"><span></span><span></span><span></span><span></span></div>
+  <div class="choice-header">
+    <div class="choice-tag">Your Order Has Arrived · وصل طلبك</div>
+    <div class="choice-main-en">Bon Appétit!</div>
+    <div class="choice-main-ar">ماذا تريد الآن؟</div>
+  </div>
+  <div class="choice-cards">
+    <div class="choice-card" onclick="orderAgain()">
+      <div class="choice-card-icon">🍽️</div>
+      <div class="choice-card-en">Order More</div>
+      <div class="choice-card-ar">اطلب المزيد</div>
+    </div>
+    <div class="choice-card done-card" onclick="imDone()">
+      <div class="choice-card-icon">👋</div>
+      <div class="choice-card-en">I'm Done</div>
+      <div class="choice-card-ar">انتهيت، شكراً</div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════
+   CONFIG
+═══════════════════════════════════════════════════ */
+const PI_IP = '172.20.10.6';
+
+/* ═══════════════════════════════════════════════════
+   PHASE TRACKING
+═══════════════════════════════════════════════════ */
+const PHASE = {
+  IDLE:                    'idle',
+  HEADING_TO_TABLE:        'heading_to_table',
+  ARRIVED_TABLE_FIRST:     'arrived_table_first',
+  VID1_PLAYING:            'vid1_playing',
+  MENU_OPEN:               'menu_open',
+  SUMMARY_OPEN:            'summary_open',
+  ORDER_CONFIRMED:         'order_confirmed',
+  QR_SHOWN:                'qr_shown',
+  PAYMENT_CONFIRMED:       'payment_confirmed',
+  VID5_PLAYING:            'vid5_playing',
+  RETURNING_HOME_FIRST:    'returning_home_first',
+  ARRIVED_HOME:            'arrived_home',
+  GOING_TO_KITCHEN:        'going_to_kitchen',
+  ARRIVED_KITCHEN:         'arrived_kitchen',
+  COMING_WITH_FOOD:        'coming_with_food',
+  DELIVERING_FOOD:         'delivering_food',
+  ARRIVED_TABLE_FOOD:      'arrived_table_food',
+  VID3_PLAYING:            'vid3_playing',
+  CHOICE_SHOWN:            'choice_shown',
+  VID6_PLAYING:            'vid6_playing',
+  VID4_PLAYING:            'vid4_playing',
+  RETURNING_HOME_FINAL:    'returning_home_final',
+  COMPLETE:                'complete'
+};
+
+let currentPhase = PHASE.IDLE;
+let robotState  = 'idle';
+let isReorder   = false;   // true when customer pressed "Order More" — drives vid5 signal
+let activeTable = 1;
+
+/* Set activeTable AND toggle a body class so CSS can subtly tint
+   the menu badge (gold for T2) — pure visual, no logic change. */
+function setActiveTable(n) {
+  activeTable = n;
+  document.body.classList.toggle('t2-active', n === 2);
+}
+let currentCuisine = 0;
+let orderTotal = 0;
+
+const tables = {
+  1: { cart:[], status:'idle' },
+  2: { cart:[], status:'idle' },
+};
+
+/* ═══════════════════════════════════════════════════
+   MENU DATA
+═══════════════════════════════════════════════════ */
+const CUISINES = [
+  { flag:'🇮🇹', en:'Italian Cuisine', ar:'المطبخ الإيطالي', dishes:[
+    { icon:'🍝', en:'Lasagna',                    ar:'لازانيا',              price:220 },
+    { icon:'🍝', en:'Penne Alfredo with Chicken', ar:'بيني ألفريدو بالدجاج', price:200 },
+    { icon:'🍚', en:'Risotto ai Funghi',           ar:'ريزوتو بالفطر',        price:210 },
+    { icon:'🍕', en:'Margherita Pizza',            ar:'بيتزا مارغريتا',       price:180 },
+    { icon:'🍗', en:'Grilled Chicken Parmigiana', ar:'دجاج بارميجيانا',       price:230 },
+  ]},
+  { flag:'🇬🇷', en:'Greek Cuisine', ar:'المطبخ اليوناني', dishes:[
+    { icon:'🥘', en:'Moussaka',  ar:'موساكا',    price:210 },
+    { icon:'🍢', en:'Souvlaki',  ar:'سوفلاكي',   price:190 },
+    { icon:'🥧', en:'Pastitsio', ar:'باستيتسيو',  price:200 },
+    { icon:'🫑', en:'Gemista',   ar:'جيميستا',   price:170 },
+    { icon:'🥗', en:'Briam',     ar:'برياّم',     price:160 },
+  ]},
+  { flag:'🇹🇷', en:'Turkish Cuisine', ar:'المطبخ التركي', dishes:[
+    { icon:'🥩', en:'Iskender Kebab', ar:'كباب إسكندر',  price:240 },
+    { icon:'🍢', en:'Adana Kebab',    ar:'كباب أضنة',     price:220 },
+    { icon:'🫒', en:'Dolma',          ar:'ورق عنب محشي', price:180 },
+    { icon:'🍆', en:'Imam Bayildi',   ar:'إمام بيلدي',    price:170 },
+    { icon:'🫓', en:'Lahmacun',       ar:'لحم عجين',      price:160 },
+  ]},
+  { flag:'🇪🇬', en:'Egyptian Cuisine', ar:'المطبخ المصري', dishes:[
+    { icon:'🍲', en:'Koshari',  ar:'كشري',   price:120 },
+    { icon:'🥬', en:'Molokhia', ar:'ملوخية',  price:180 },
+    { icon:'🍚', en:'Fatta',    ar:'فتة',     price:200 },
+    { icon:'🫑', en:'Mahshi',   ar:'محشي',    price:170 },
+    { icon:'🥙', en:'Hawawshi', ar:'حواوشي',  price:150 },
+  ]},
+  { flag:'🇱🇧', en:'Levantine Cuisine', ar:'المطبخ الشامي', dishes:[
+    { icon:'🌯', en:'Chicken Shawarma', ar:'شاورما دجاج', price:170 },
+    { icon:'🍢', en:'Kofta Kebab',      ar:'كفتة كباب',   price:210 },
+    { icon:'🥘', en:'Mansaf',           ar:'منسف',         price:260 },
+    { icon:'🍚', en:'Maqluba',          ar:'مقلوبة',       price:200 },
+    { icon:'🐟', en:'Sayadiya',         ar:'صيادية',       price:220 },
+  ]},
+];
+
+/* ═══════════════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════════════ */
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  const el = document.getElementById(id);
+  if (el) el.classList.add('active');
+}
+
+function flash() {
+  const f = document.getElementById('tapFlash');
+  f.classList.add('flash');
+  setTimeout(() => f.classList.remove('flash'), 150);
+}
+
+function playVideo(vidId, screenId) {
+  show(screenId);
+  const v = document.getElementById(vidId);
+  if (v) {
+    v.currentTime = 0;
+    v.play().catch(() => {});
+  }
+}
+
+function sendToPi(msg) {
+  if (wsServer && wsServer.readyState === WebSocket.OPEN) {
+    wsServer.send(String(msg));
+    console.log('[TX]', msg);
+  }
+}
+
+function showLoading(icon, en, ar) {
+  document.getElementById('loadingIcon').textContent   = icon;
+  document.getElementById('loadingTitleEn').textContent = en;
+  document.getElementById('loadingTitleAr').textContent = ar;
+  show('s-loading');
+}
+
+function setPhase(newPhase) {
+  currentPhase = newPhase;
+  console.log('[PHASE]', currentPhase);
+}
+
+/* ═══════════════════════════════════════════════════
+   MESSAGE HANDLER
+═══════════════════════════════════════════════════ */
+function handleMessage(raw) {
+  const trimmed = String(raw).trim();
+  console.log('[RX]', trimmed, '| phase:', currentPhase);
+
+  // Tagged manual format: "M:1" .. "M:9" from the kitchen GUI.
+  // We display the action on a dedicated overlay — these messages NEVER
+  // hit handleESPState and so can't accidentally trigger vid1 etc.
+  if (trimmed.startsWith('M:')) {
+    const mn = parseInt(trimmed.substring(2));
+    if (!isNaN(mn)) handleManualDisplay(mn);
+    return;
+  }
+
+  const num = parseInt(trimmed);
+  if (!isNaN(num) && String(num) === trimmed) {
+    handleESPState(num);
+    return;
+  }
+
+  // Legacy: "paid" string for phone payment
+  if (trimmed === 'paid') {
+    handlePaymentReceived();
+    return;
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   MANUAL MODE DISPLAY  (driven by "M:N" from kitchen GUI)
+   M:8 = enter, M:9 = exit, M:1-4 = direction, M:5/6 = stepper,
+   M:7 = STOP. Show a floating overlay over whatever screen
+   is active. Does NOT touch the underlying screen / phase /
+   communication — just paints info on top.
+═══════════════════════════════════════════════════ */
+const MANUAL_ACTIONS = {
+  8: { banner: 'MANUAL MODE', icon: '⚙️', en: 'Manual Mode Active', ar: 'وضع التحكم اليدوي', stop: false },
+  1: { banner: 'MANUAL MODE', icon: '↑',  en: 'Moving Forward',     ar: 'للأمام',           stop: false },
+  2: { banner: 'MANUAL MODE', icon: '↓',  en: 'Moving Backward',    ar: 'للخلف',            stop: false },
+  3: { banner: 'MANUAL MODE', icon: '↻',  en: 'Turning Right',      ar: 'الانعطاف يميناً',  stop: false },
+  4: { banner: 'MANUAL MODE', icon: '↺',  en: 'Turning Left',       ar: 'الانعطاف يساراً',  stop: false },
+  5: { banner: 'MANUAL MODE', icon: '⬆',  en: 'Stepper Up',         ar: 'رفع المنصة',       stop: false },
+  6: { banner: 'MANUAL MODE', icon: '⬇',  en: 'Stepper Down',       ar: 'خفض المنصة',       stop: false },
+  7: { banner: 'STOPPED',     icon: '⏹',  en: 'Stop',               ar: 'إيقاف',            stop: true  }
+};
+
+function handleManualDisplay(mn) {
+  const overlay = document.getElementById('manual-overlay');
+  if (!overlay) return;
+
+  if (mn === 9) {                          // EXIT manual mode
+    overlay.classList.remove('visible');
+    overlay.classList.remove('mo-stop');
+    return;
+  }
+
+  const action = MANUAL_ACTIONS[mn];
+  if (!action) return;
+
+  document.getElementById('moBanner').textContent   = action.banner;
+  document.getElementById('moIcon').textContent     = action.icon;
+  document.getElementById('moActionEn').textContent = action.en;
+  document.getElementById('moActionAr').textContent = action.ar;
+  overlay.classList.toggle('mo-stop', action.stop);
+  overlay.classList.add('visible');
+}
+
+/* ═══════════════════════════════════════════════════
+   PAYMENT RECEIVED
+═══════════════════════════════════════════════════ */
+function handlePaymentReceived() {
+  if (currentPhase !== PHASE.QR_SHOWN) return;
+  
+  flash();
+  orderTotal = tables[activeTable].cart.reduce((s, d) => s + d.price, 0) || orderTotal;
+  document.getElementById('paidAmount').textContent = orderTotal + ' EGP';
+  tables[activeTable].cart = [];
+  tables[activeTable].status = 'paid';
+  setPhase(PHASE.PAYMENT_CONFIRMED);
+  robotState = 'paying';
+  show('s-paid');
+  
+  setTimeout(() => {
+    setPhase(PHASE.VID5_PLAYING);
+    playVideo('vid5', 's-vid5');
+  }, 2000);
+}
+
+/* ═══════════════════════════════════════════════════
+   ESP STATE HANDLER
+   ─────────────────────────────────────────────────────
+   3   = Table arrival trigger
+   13  = H→Kitchen           14 = Kitchen→Home (food)
+   17  = COMPLETE            18 = Arrived at destination
+   19  = OBSTACLE            22 = AVOIDING
+
+   TABLE 1 mission:
+     11 H→T1   12 T1→H   15 H→T1 (food)   16 T1→H final
+
+   TABLE 2 mission  (mirrors T1, same screens/videos):
+     41 H→T2   42 T2→H   45 H→T2 (food)   46 T2→H final
+═══════════════════════════════════════════════════ */
+function handleESPState(state) {
+  console.log('[ESP STATE]', state, '| phase:', currentPhase);
+
+  switch (state) {
+
+    case 3: // Table arrival trigger (from bridge)
+      if (currentPhase === PHASE.HEADING_TO_TABLE || currentPhase === PHASE.ARRIVED_TABLE_FIRST) {
+        setPhase(PHASE.ARRIVED_TABLE_FIRST);
+        tables[activeTable].cart = [];
+        tables[activeTable].status = 'ordering';
+        robotState = 'ordering';
+        flash();
+        setPhase(PHASE.VID1_PLAYING);
+        playVideo('vid1', 's-vid1');
+      }
+      break;
+
+    case 11: // H→T1: Heading to Table 1
+      if (currentPhase === PHASE.IDLE || currentPhase === PHASE.ARRIVED_HOME || currentPhase === PHASE.COMPLETE) {
+        setActiveTable(1);
+        setPhase(PHASE.HEADING_TO_TABLE);
+        robotState = 'heading';
+        showLoading('🤖', 'Robot Heading to Your Table', 'في الطريق إلى طاولتك');
+      }
+      break;
+
+    case 41: // H→T2: Heading to Table 2  (same screen as 11, table 2 in context)
+      if (currentPhase === PHASE.IDLE || currentPhase === PHASE.ARRIVED_HOME || currentPhase === PHASE.COMPLETE) {
+        setActiveTable(2);
+        setPhase(PHASE.HEADING_TO_TABLE);
+        robotState = 'heading';
+        showLoading('🤖', 'Robot Heading to Your Table', 'في الطريق إلى طاولتك');
+      }
+      break;
+
+    case 12: // T1→Home: Returning home after order
+    case 42: // T2→Home: Returning home after order  (mirror of 12)
+      if (currentPhase === PHASE.PAYMENT_CONFIRMED || currentPhase === PHASE.VID5_PLAYING) {
+        setPhase(PHASE.RETURNING_HOME_FIRST);
+        robotState = 'going_home';
+        showLoading('🏠', 'Returning to Home Base', 'العودة إلى القاعدة');
+      }
+      break;
+
+    case 13: // H→K: Going to kitchen
+      // Also allow IDLE / COMPLETE so a SECOND mission's kitchen-run can start
+      // after a previous mission has just finished (state 17).
+      if (currentPhase === PHASE.ARRIVED_HOME || currentPhase === PHASE.IDLE || currentPhase === PHASE.COMPLETE) {
+        setPhase(PHASE.GOING_TO_KITCHEN);
+        robotState = 'going_kitchen';
+        showLoading('🍳', 'Going to Kitchen', 'الذهاب إلى المطبخ');
+      }
+      break;
+
+    case 14: // K→Home: Food picked up
+      if (currentPhase === PHASE.ARRIVED_KITCHEN) {
+        setPhase(PHASE.COMING_WITH_FOOD);
+        robotState = 'coming_with_food';
+        showLoading('🚗', 'Food Picked Up! Coming to You', 'تم استلام الطعام، قادم إليك');
+      }
+      break;
+
+    case 15: // H→T1: Delivering food
+      if (currentPhase === PHASE.COMING_WITH_FOOD) {
+        setActiveTable(1);               // ensure we know food is going to T1
+        setPhase(PHASE.DELIVERING_FOOD);
+        robotState = 'delivering';
+        showLoading('🍽️', 'Delivering Your Food', 'توصيل طعامك');
+      }
+      break;
+
+    case 45: // H→T2: Delivering food  (mirror of 15)
+      if (currentPhase === PHASE.COMING_WITH_FOOD) {
+        setActiveTable(2);               // ensure we know food is going to T2
+        setPhase(PHASE.DELIVERING_FOOD);
+        robotState = 'delivering';
+        showLoading('🍽️', 'Delivering Your Food', 'توصيل طعامك');
+      }
+      break;
+
+    case 16: // T1→Home final (after delivery)
+    case 46: // T2→Home final (after delivery)  (mirror of 16)
+      if (currentPhase === PHASE.VID4_PLAYING) {
+        setPhase(PHASE.RETURNING_HOME_FINAL);
+        robotState = 'returning';
+        showLoading('🏠', 'Thank You! Returning Home', 'شكراً! العودة للمنزل');
+      }
+      break;
+
+    case 17: // COMPLETE
+      if (currentPhase === PHASE.RETURNING_HOME_FINAL) {
+        setPhase(PHASE.COMPLETE);
+        robotState = 'idle';
+        setTimeout(() => {
+          setPhase(PHASE.IDLE);
+          show('s-idle');
+        }, 1500);
+      }
+      break;
+
+    case 18: // WAITING = Robot arrived at destination
+      console.log('[ARRIVED] state 18, phase:', currentPhase);
+      
+      if (currentPhase === PHASE.HEADING_TO_TABLE) {
+        setPhase(PHASE.ARRIVED_TABLE_FIRST);
+        tables[activeTable].cart = [];
+        tables[activeTable].status = 'ordering';
+        robotState = 'ordering';
+        flash();
+        setPhase(PHASE.VID1_PLAYING);
+        playVideo('vid1', 's-vid1');
+        
+      } else if (currentPhase === PHASE.RETURNING_HOME_FIRST) {
+        setPhase(PHASE.ARRIVED_HOME);
+        showLoading('🔔', 'Waiting for Kitchen Bell', 'في انتظار جرس المطبخ');
+        
+      } else if (currentPhase === PHASE.GOING_TO_KITCHEN) {
+        setPhase(PHASE.ARRIVED_KITCHEN);
+        showLoading('🍳', 'Arrived at Kitchen', 'وصل إلى المطبخ');
+        
+      } else if (currentPhase === PHASE.DELIVERING_FOOD) {
+        setPhase(PHASE.ARRIVED_TABLE_FOOD);
+        setPhase(PHASE.VID3_PLAYING);
+        playVideo('vid3', 's-vid3');
+        
+      } else if (currentPhase === PHASE.RETURNING_HOME_FINAL) {
+        setPhase(PHASE.COMPLETE);
+        robotState = 'idle';
+        setTimeout(() => {
+          setPhase(PHASE.IDLE);
+          show('s-idle');
+        }, 1500);
+      }
+      break;
+
+    // States 19 (obstacle) and 22 (avoiding) are intentionally NOT
+    // handled on the customer-facing kiosk anymore — the kitchen GUI
+    // shows the obstacle overlay so the staff can intervene. The kiosk
+    // simply leaves whatever screen is currently shown.
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   CART HELPERS
+═══════════════════════════════════════════════════ */
+function tableCart()      { return tables[activeTable].cart; }
+function tableTotal()     { return tableCart().reduce((s, d) => s + d.price, 0); }
+function tableItemCount() { return tableCart().length; }
+function groupedCart(cart) {
+  const g = {};
+  cart.forEach(d => { g[d.en] = g[d.en] || { ...d, qty: 0 }; g[d.en].qty++; });
+  return Object.values(g);
+}
+
+/* ═══════════════════════════════════════════════════
+   MENU RENDER
+═══════════════════════════════════════════════════ */
+const dotTrack = document.getElementById('dotTrack');
+CUISINES.forEach((_, i) => {
+  const d = document.createElement('div');
+  d.className = 'dot' + (i === 0 ? ' active' : '');
+  d.id = 'dot' + i;
+  dotTrack.appendChild(d);
+});
+
+function renderCuisine(idx, direction) {
+  const col = document.getElementById('dishesCol');
+  const cuisine = CUISINES[idx];
+  if (direction) col.classList.add(direction === 1 ? 'slide-out-left' : 'slide-out-right');
+  setTimeout(() => {
+    document.getElementById('cuisineFlag').textContent = cuisine.flag;
+    document.getElementById('cuisineNameEn').textContent = cuisine.en;
+    document.getElementById('cuisineNameAr').textContent = cuisine.ar;
+    document.querySelectorAll('.dot').forEach((d, i) => d.classList.toggle('active', i === idx));
+    document.getElementById('prevBtn').style.opacity = idx === 0 ? '0.3' : '1';
+    document.getElementById('nextBtn').style.opacity = idx === CUISINES.length - 1 ? '0.3' : '1';
+    col.innerHTML = '';
+    cuisine.dishes.forEach((dish, i) => {
+      const qty = tableCart().filter(d => d.en === dish.en).length;
+      const c = document.createElement('div');
+      c.className = 'dish-card' + (qty > 0 ? ' in-cart' : '');
+      c.dataset.en = dish.en;
+      c.innerHTML = `
+        <span class="dish-num">${i + 1}</span>
+        <span class="dish-icon-sm">${dish.icon}</span>
+        <div class="dish-text">
+          <div class="dish-name-en">${dish.en}</div>
+          <div class="dish-name-ar">${dish.ar}</div>
+        </div>
+        <div class="dish-price-tag">${dish.price}<span>EGP</span></div>
+        <div class="qty-badge">${qty > 0 ? qty : ''}</div>`;
+      c.addEventListener('click', () => {
+        flash();
+        tableCart().push({ ...dish });
+        renderCuisine(idx, 0);
+        updateCartUI();
+      });
+      col.appendChild(c);
+    });
+    if (direction) {
+      col.classList.remove('slide-out-left', 'slide-out-right');
+      col.classList.add(direction === 1 ? 'slide-in-left' : 'slide-in-right');
+      requestAnimationFrame(() => requestAnimationFrame(() =>
+        col.classList.remove('slide-in-left', 'slide-in-right')));
+    }
+  }, direction ? 280 : 0);
+}
+
+function navigate(dir) {
+  const next = currentCuisine + dir;
+  if (next < 0 || next >= CUISINES.length) return;
+  flash();
+  currentCuisine = next;
+  renderCuisine(currentCuisine, dir);
+}
+
+function updateCartUI() {
+  const count = tableItemCount();
+  const total = tableTotal();
+  document.getElementById('orderBadge').textContent = count;
+  document.getElementById('orderBtn').disabled = count === 0;
+  const s = document.getElementById('cartSummaryText');
+  s.innerHTML = count === 0
+    ? 'No items selected yet'
+    : `<strong>${count}</strong> item${count > 1 ? 's' : ''} &nbsp;·&nbsp; <strong>${total} EGP</strong>`;
+}
+
+/* ═══════════════════════════════════════════════════
+   ORDER SUMMARY
+═══════════════════════════════════════════════════ */
+function openSummary() {
+  if (tableItemCount() === 0) return;
+  flash();
+  setPhase(PHASE.SUMMARY_OPEN);
+  const list = document.getElementById('summaryList');
+  list.innerHTML = '';
+  groupedCart(tableCart()).forEach(d => {
+    const row = document.createElement('div');
+    row.className = 'summary-row';
+    row.innerHTML = `
+      <span class="sr-icon">${d.icon}</span>
+      <div class="sr-text">
+        <div class="sr-en">${d.en}</div>
+        <div class="sr-ar">${d.ar}</div>
+      </div>
+      <div class="sr-right">
+        <span class="sr-qty">× ${d.qty}</span>
+        <span class="sr-price">${d.price * d.qty} EGP</span>
+      </div>`;
+    list.appendChild(row);
+  });
+  const total = tableTotal();
+  const count = tableItemCount();
+  document.getElementById('totalAmount').textContent = total + ' EGP';
+  document.getElementById('totalItems').textContent = count + ' item' + (count > 1 ? 's' : '');
+  show('s-summary');
+}
+
+/* ═══════════════════════════════════════════════════
+   COMPLETE ORDER → vid2
+═══════════════════════════════════════════════════ */
+function completeOrder() {
+  if (currentPhase !== PHASE.MENU_OPEN && currentPhase !== PHASE.SUMMARY_OPEN) return;
+  flash();
+  orderTotal = tableTotal();
+  const orderPayload = JSON.stringify({
+    table: activeTable,
+    order_items: groupedCart(tableCart()).map(d => ({
+      name: d.en, qty: d.qty, price: d.price * d.qty
+    })),
+    total: orderTotal
+  });
+  sendToPi(orderPayload);
+  setPhase(PHASE.ORDER_CONFIRMED);
+  robotState = 'order_confirmed';
+  playVideo('vid2', 's-vid2');
+}
+
+/* ═══════════════════════════════════════════════════
+   CHOICE SCREEN ACTIONS
+   • "Order More"  → NO signal sent on click. The customer browses
+                     the menu again, pays, vid5 plays, then the existing
+                     vid5-ended handler sends 5 (continue sequence) —
+                     identical to the first-order flow. Robot is told to
+                     move only after the WHOLE order-more sequence ends.
+   • "I'm Done"    → NO signal sent on click. The robot signal 6 is sent
+                     only when vid4 finishes playing, so the robot doesn't
+                     start moving before the customer sees the thank-you
+                     video.
+═══════════════════════════════════════════════════ */
+function orderAgain() {
+  if (currentPhase !== PHASE.CHOICE_SHOWN) return;
+  flash();
+  tables[activeTable].cart = [];
+  tables[activeTable].status = 'ordering';
+  isReorder = true;   // vid5 will send 7 instead of 5 at the end
+  // Intentionally NO sendToPi(...) here — robot must not move until the
+  // new order is placed, paid, and vid5 finishes. That happens in the
+  // vid5 'ended' listener which sends 7 (re-order signal).
+  setPhase(PHASE.VID6_PLAYING);
+  robotState = 'ordering';
+  currentCuisine = 0;
+  playVideo('vid6', 's-vid6');
+}
+
+function imDone() {
+  if (currentPhase !== PHASE.CHOICE_SHOWN) return;
+  flash();
+  isReorder = false;  // clean up in case Order More was somehow left set
+  // Intentionally NO sendToPi(6) here — robot stays at the table while
+  // vid4 plays. The signal is fired in the vid4 'ended' listener.
+  setPhase(PHASE.VID4_PLAYING);
+  robotState = 'done';
+  playVideo('vid4', 's-vid4');
+}
+
+/* ═══════════════════════════════════════════════════
+   VIDEO END HANDLERS
+═══════════════════════════════════════════════════ */
+
+document.getElementById('vid1').addEventListener('ended', () => {
+  console.log('[VIDEO] vid1 ended');
+  if (currentPhase === PHASE.VID1_PLAYING) {
+    setPhase(PHASE.MENU_OPEN);
+    robotState = 'ordering';
+    currentCuisine = 0;
+    document.getElementById('menuTableBadge').textContent = 'Table ' + activeTable;
+    renderCuisine(0, null);
+    updateCartUI();
+    show('s-food');
+  }
+});
+
+document.getElementById('vid2').addEventListener('ended', () => {
+  console.log('[VIDEO] vid2 ended');
+  if (currentPhase === PHASE.ORDER_CONFIRMED) {
+    setPhase(PHASE.QR_SHOWN);
+    robotState = 'paying';
+    const total = orderTotal;
+    const payUrl = `http://${PI_IP}:8000/payment-complete.html?amount=${total}`;
+    document.getElementById('qrBox').innerHTML =
+      `<img src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(payUrl)}" style="width:180px;height:180px;" alt="QR Code">`;
+    document.getElementById('qrTotal').textContent = total;
+    show('s-qr');
+  }
+});
+
+document.getElementById('vid5').addEventListener('ended', () => {
+  console.log('[VIDEO] vid5 ended | isReorder:', isReorder);
+  if (currentPhase === PHASE.VID5_PLAYING) {
+    if (isReorder) {
+      // Re-order: payment done for SECOND order.
+      // Signal 7 tells the robot: go home, reset to SEQ_1/SEQ_2 so the
+      // kitchen GUI bell can trigger a 2nd kitchen run (SEQ_3/SEQ_4).
+      // The kitchen GUI will ring the bell when the food is ready again.
+      sendToPi(7);
+      isReorder = false;
+    } else {
+      // First order: payment done. Signal 5 tells the robot to go home
+      // so it can wait for the kitchen bell (SEQ_1/SEQ_2 → STATE_WAITING).
+      sendToPi(5);
+    }
+    robotState = 'waiting_bell';
+  }
+});
+
+document.getElementById('vid3').addEventListener('ended', () => {
+  console.log('[VIDEO] vid3 ended');
+  if (currentPhase === PHASE.VID3_PLAYING) {
+    setPhase(PHASE.CHOICE_SHOWN);
+    show('s-choice');
+  }
+});
+
+document.getElementById('vid6').addEventListener('ended', () => {
+  console.log('[VIDEO] vid6 ended');
+  if (currentPhase === PHASE.VID6_PLAYING) {
+    setPhase(PHASE.MENU_OPEN);
+    robotState = 'ordering';
+    currentCuisine = 0;
+    document.getElementById('menuTableBadge').textContent = 'Table ' + activeTable;
+    renderCuisine(0, null);
+    updateCartUI();
+    show('s-food');
+  }
+});
+
+document.getElementById('vid4').addEventListener('ended', () => {
+  console.log('[VIDEO] vid4 ended');
+  if (currentPhase === PHASE.VID4_PLAYING) {
+    // Vid4 finished — NOW tell the robot the customer is done so it
+    // can head home. This is delayed until here (not on the "I'm Done"
+    // button click) so the robot doesn't drive off mid-video.
+    sendToPi(6);
+    showLoading('🏠', 'Thank You! Returning Home', 'شكراً! العودة للمنزل');
+  }
+});
+
+/* ═══════════════════════════════════════════════════
+   WEBSOCKET
+═══════════════════════════════════════════════════ */
+let wsServer;
+(function connectWS() {
+  wsServer = new WebSocket(`ws://${PI_IP}:8765`);
+  wsServer.onmessage = e => handleMessage(e.data);
+  wsServer.onclose   = () => setTimeout(connectWS, 2000);
+  wsServer.onerror   = () => wsServer.close();
+})();
+
+window.addEventListener('click', () => {
+  document.querySelectorAll('video').forEach(v => { v.muted = false; });
+}, { once: true });
+
+console.log('[Kiosk] Ready. Phase:', currentPhase);
+</script>
+</body>
+</html>
